@@ -11,10 +11,16 @@ import pandas as pd
 import os
 from datetime import datetime
 import numpy as np
+import argparse
 
 from model import DinoV3BackBone
 from utils import load_data
 
+
+LOSS_KEYS = [
+    "green_g", "clover_g", "dead_g", "total_g",
+    "gdm_g", "height", "has_clover"
+]
 
 class CSIRODataset(Dataset):
     def __init__(
@@ -198,7 +204,8 @@ class Trainer:
         r2_score = self.compute_r2(all_preds, all_targets)
         avg_losses["r2"] = r2_score
 
-        return avg_losses
+        original_mae = self.compute_orig_scale_metrics(all_preds, all_targets)
+        return avg_losses, original_mae
 
     def compute_r2(self, pred_dict, target_dict):
         numerator = 0
@@ -216,14 +223,45 @@ class Trainer:
 
         return 1 - (numerator / denominator).item()
 
+    def compute_orig_scale_metrics(self, pred_dict, target_dict):
+        """
+        Computes MAE in the original units (grams, cm).
+        """
+        metrics = {}
+        for key, preds in pred_dict.items():
+            flat_preds = torch.cat(preds)
+            flat_targets = torch.cat(target_dict[key])
+
+            # Inverse Transform Logic
+            if key == "height":
+                real_pred = torch.exp(flat_preds)
+                real_target = torch.exp(flat_targets)
+            elif key in ["green_g", "clover_g", "dead_g", "total_g", "gdm_g"]:
+                # Dataset used: np.log(1 + x) -> Inverse: exp(x) - 1
+                real_pred = torch.exp(flat_preds) - 1
+                real_target = torch.exp(flat_targets) - 1
+
+                # Clamp negative predictions to 0 (since mass can't be negative)
+                real_pred = torch.relu(real_pred)
+            else:
+                continue
+
+            # Compute MAE (Mean Absolute Error)
+            mae = torch.mean(torch.abs(real_pred - real_target))
+            metrics[key] = mae.item()
+
+        return metrics
+
     def train(self):
         for epoch in range(self.epochs):
             train_metrics = self.train_one_epoch(epoch + 1)
-            val_metrics = self.validation(epoch + 1)
+            val_metrics, original_mae = self.validation(epoch + 1)
 
             log = {}
             log.update(self._prefix_metrics(train_metrics, "train"))
             log.update(self._prefix_metrics(val_metrics, "val"))
+            log.update(self._prefix_metrics(original_mae, "orig_MAE"))
+
             self.wandb_run.log(log)
 
             print(f"Epoch {epoch + 1}/{self.epochs}: Train Loss={train_metrics['main_loss']:.4f}, Val R2={val_metrics['r2']:.4f}")
@@ -236,9 +274,9 @@ def main(config):
         project="CSIRO",
         name=f"{timestamp}_DecoderOnly",
         config=config,
-        #mode="offline"
+        mode=config["wandb_mode"]
     )
-    df = load_data()
+    df = load_data(config["data_path"])
     train_transform = v2.Compose([
         v2.ToImage(),
 
@@ -301,32 +339,59 @@ def main(config):
     trainer.train()
 
 if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--epochs", type=int, default=30)
+    parser.add_argument("--batch_size", type=int, default=64)
+    parser.add_argument("--input_H", type=int, default=768)
+    parser.add_argument("--input_W", type=int, default=768)
+    parser.add_argument("--lr", type=float, default=1e-4)
+    parser.add_argument("--weight_decay", type=float, default=1e-4)
+    parser.add_argument("--loss_coefficient", type=float, nargs="+")
+    parser.add_argument("--wandb_mode", type=str, default="online")
+
+    parser.add_argument("--predict_total", action="store_true")
+    parser.add_argument("--predict_gdm", action="store_true")
+    parser.add_argument("--predict_height", action="store_true")
+    parser.add_argument("--predict_has_clover", action="store_true")
+    parser.add_argument("--freeze_backbone", action="store_true")
+    parser.add_argument("--hidden_dim", type=int, default=1024)
+
+    parser.add_argument("--data_path", type=str, default="data/train.csv")
+    args = parser.parse_args()
+
+    # Validating loss coefficient
+    coeffs = args.loss_coefficient
+    if len(coeffs) != len(LOSS_KEYS):
+        raise ValueError(
+            f"Expected {len(LOSS_KEYS)} loss coefficients, but got {len(coeffs)}.\n"
+            f"Required keys: {LOSS_KEYS}"
+        )
+    if not torch.isclose(torch.tensor(sum(coeffs)), torch.tensor(1.0)):
+        raise ValueError(f"Loss coefficients must sum to 1. Current sum: {sum(coeffs)}")
+
+    loss_coefficient = dict(zip(LOSS_KEYS, coeffs))
+
     config = {
         # Training config
-        "epochs": 10,
+        "epochs": args.epochs,
         "device": "cuda" if torch.cuda.is_available() else "cpu",
-        "batch_size": 64,
-        "input_H": 768,
-        "input_W": 768,
-        "loss_coefficient": {
-            "green_g": 0.8,
-            "clover_g": 0.8,
-            "dead_g": 0.8,
-            "total_g": 0.4,
-            "gdm_g": 0.16,
-            "height": 0.1,
-            "has_clover": 0.1
-        },
-        "lr": 1e-4,
-        "weight_decay": 1e-4,
+        "batch_size": args.batch_size,
+        "input_H": args.input_H,
+        "input_W": args.input_W,
+        "loss_coefficient": loss_coefficient,
+        "lr": args.lr,
+        "weight_decay": args.weight_decay,
 
         # Model config
-        "predict_total": True,
-        "predict_gdm": True,
-        "predict_height": True,
-        "predict_has_clover": True,
-        "freeze_backbone": True,
-        "hidden_dim": 1024
+        "predict_total": args.predict_total,
+        "predict_gdm": args.predict_gdm,
+        "predict_height": args.predict_height,
+        "predict_has_clover": args.predict_has_clover,
+        "freeze_backbone": args.freeze_backbone,
+        "hidden_dim": args.hidden_dim,
+
+        # Other
+        "data_path": args.data_path
     }
     main(config)
 

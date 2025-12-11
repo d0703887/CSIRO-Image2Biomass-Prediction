@@ -24,8 +24,8 @@ def make_transform(
     return v2.Compose(transform)
 
 
-def load_data():
-    df = pd.read_csv("data/train.csv")
+def load_data(data_path: str):
+    df = pd.read_csv(data_path)
     pivoted_df = df.pivot_table(
         index=["image_path", "Sampling_Date", "State", "Species", "Pre_GSHH_NDVI", "Height_Ave_cm"],
         columns="target_name",
