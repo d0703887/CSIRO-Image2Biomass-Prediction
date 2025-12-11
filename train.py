@@ -391,7 +391,8 @@ if __name__ == '__main__':
         "hidden_dim": args.hidden_dim,
 
         # Other
-        "data_path": args.data_path
+        "data_path": args.data_path,
+        "wandb_mode": args.wandb_mode
     }
     main(config)
 
