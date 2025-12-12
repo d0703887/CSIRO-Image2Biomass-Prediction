@@ -259,10 +259,10 @@ class Trainer:
         for epoch in range(1, self.epochs + 1):
             # two-stage training to stabilize training
             if not self.freeze_backbone:
-                if epoch <= 0:
+                if epoch <= 5:
                     for param in self.model.backbone.parameters():
                         param.requires_grad = False
-                elif epoch == 1:
+                elif epoch == 6:
                     for param in self.model.backbone.parameters():
                         param.requires_grad = True
 
