@@ -277,9 +277,9 @@ class Trainer:
             log.update(self._prefix_metrics(val_metrics, "val"))
             log.update(self._prefix_metrics(original_mae, "orig_MAE"))
 
-            self.wandb_run.log(log)
+            self.wandb_run.log(log, step=epoch)
 
-            print(f"Epoch {epoch + 1}/{self.epochs}: Train Loss={train_metrics['main_loss']:.4f}, Val R2={val_metrics['r2']:.4f}")
+            print(f"Epoch {epoch}/{self.epochs}: Train Loss={train_metrics['main_loss']:.4f}, Val R2={val_metrics['r2']:.4f}")
 
 
 def main(config):
@@ -287,7 +287,7 @@ def main(config):
     wandb_run = wandb.init(
         entity="d0703887",
         project="CSIRO",
-        name=f"{timestamp}_DecoderOnly",
+        name=f"{timestamp}_CSIRO",
         config=config,
         mode=config["wandb_mode"]
     )

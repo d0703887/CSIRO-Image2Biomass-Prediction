@@ -62,6 +62,12 @@ class DinoV3BackBone(nn.Module):
         self.height_mlp = make_head(False) if predict_height else None
         self.has_clover_mlp = make_head(True) if predict_has_clover else None
 
+    def sum_tile(self, tile_preds, b):
+        pairs = tile_preds.view(b, 2)
+        real_value = torch.exp(pairs) - 1
+        total_real_value = real_value.sum(dim=1)
+        return torch.log(1 + total_real_value)
+
     def forward(self, x):
         """
 
@@ -78,23 +84,36 @@ class DinoV3BackBone(nn.Module):
         if self.predict_total:
             tile_total = self.total_mlp(img_feature)
         else:
-            tile_total = tile_green + tile_clover + tile_dead
+            # sum log-transformed value
+            real_green = torch.exp(tile_green) - 1
+            real_clover = torch.exp(tile_clover) - 1
+            real_dead = torch.exp(tile_dead) - 1
+            tile_total = torch.log(1 + real_green + real_clover + real_dead)
 
         if self.predict_gdm:
             tile_gdm = self.gdm_mlp(img_feature)
         else:
-            tile_gdm = tile_green + tile_clover
+            # sum log-transformed value
+            real_green = torch.exp(tile_green) - 1
+            real_clover = torch.exp(tile_clover) - 1
+            tile_gdm = torch.log(1 + real_green + real_clover)
 
         tile_height = self.height_mlp(img_feature) if self.predict_height else None
         tile_has_clover = self.has_clover_mlp(img_feature) if self.predict_has_clover else None
 
         # Aggregation
-        green_g = tile_green.view(b, 2).sum(dim=1)
-        clover_g = tile_clover.view(b, 2).sum(dim=1)
-        dead_g = tile_dead.view(b, 2).sum(dim=1)
-        total_g = tile_total.view(b, 2).sum(dim=1)
-        gdm_g = tile_gdm.view(b, 2).sum(dim=1)
-        height = tile_height.view(b, 2).mean(dim=1) if self.predict_height else None
+        green_g = self.sum_tile(tile_green, b)
+        clover_g = self.sum_tile(tile_clover, b)
+        dead_g = self.sum_tile(tile_dead, b)
+        total_g = self.sum_tile(tile_total, b)
+        gdm_g = self.sum_tile(tile_gdm, b)
+
+        if self.predict_height:
+            real_height = torch.exp(tile_height)
+            height = torch.log(real_height.view(b, 2).mean(dim=1))
+        else:
+            height = None
+
         has_clover = torch.max(tile_has_clover.view(b, 2), dim=1).values if self.predict_has_clover else None
 
         return {
