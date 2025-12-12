@@ -262,9 +262,12 @@ class Trainer:
                 if epoch <= 5:
                     for param in self.model.backbone.parameters():
                         param.requires_grad = False
+                # Stage 2: unfreeze backbone and lower lr
                 elif epoch == 6:
                     for param in self.model.backbone.parameters():
                         param.requires_grad = True
+                    for g in self.optimizer.param_groups:
+                        g['lr'] = g['lr'] * 0.1
 
             train_metrics = self.train_one_epoch(epoch)
             val_metrics, original_mae = self.validation(epoch)

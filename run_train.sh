@@ -14,7 +14,7 @@ python train.py \
     --predict_total \
     --predict_height \
     --predict_has_clover \
-    #--freeze_backbone \
     --hidden_dim 1024 \
     --data_folder "data" \
     #--predict_gdm \
+    #--freeze_backbone \
