@@ -2,6 +2,7 @@ import torchvision
 from torchvision.transforms import v2
 import torch
 import pandas as pd
+import os
 
 
 def make_transform(
@@ -24,8 +25,9 @@ def make_transform(
     return v2.Compose(transform)
 
 
-def load_data(data_path: str):
-    df = pd.read_csv(data_path)
+def load_data(data_folder: str):
+    # TODO: change data path
+    df = pd.read_csv(os.path.join(data_folder, "train.csv"))
     pivoted_df = df.pivot_table(
         index=["image_path", "Sampling_Date", "State", "Species", "Pre_GSHH_NDVI", "Height_Ave_cm"],
         columns="target_name",

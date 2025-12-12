@@ -27,6 +27,7 @@ class MLP(nn.Module):
 class DinoV3BackBone(nn.Module):
     def __init__(
             self,
+            model_name: str,
             hidden_dim: int,
             predict_total: bool = True,
             predict_gdm: bool = False,
@@ -42,7 +43,7 @@ class DinoV3BackBone(nn.Module):
 
         # DinoV3
         self.backbone = AutoModel.from_pretrained(
-            "facebook/dinov3-vits16-pretrain-lvd1689m",
+            model_name,
             device_map="auto"
         )
         self.backbone_embed_dim = self.backbone.config.hidden_size

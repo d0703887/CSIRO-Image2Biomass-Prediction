@@ -18,17 +18,19 @@ from utils import load_data
 
 
 LOSS_KEYS = [
-    "green_g", "clover_g", "dead_g", "total_g",
-    "gdm_g", "height", "has_clover"
+    "green_g", "clover_g", "dead_g", "gdm_g",
+    "total_g", "height", "has_clover"
 ]
 
 class CSIRODataset(Dataset):
     def __init__(
             self,
+            data_folder: str,
             df: pd.DataFrame,
             transform = None,
             overlap_ratio = 0.1
     ):
+        self.data_folder = data_folder
         self.df = df
         self.transform = transform
         self.overlap_ratio = overlap_ratio
@@ -52,7 +54,7 @@ class CSIRODataset(Dataset):
         return left_img, right_img
 
     def __getitem__(self, idx):
-        img_path = os.path.join("data", self.img_paths[idx])
+        img_path = os.path.join(self.data_folder, self.img_paths[idx])
         img = read_image(img_path)
         left_img, right_img = self.split_img(img)
         if self.transform:
@@ -276,7 +278,7 @@ def main(config):
         config=config,
         mode=config["wandb_mode"]
     )
-    df = load_data(config["data_path"])
+    df = load_data(config["data_folder"])
     train_transform = v2.Compose([
         v2.ToImage(),
 
@@ -318,10 +320,11 @@ def main(config):
     ])
 
     train_df, val_df = train_test_split(df, test_size=0.15, random_state=42)
-    train_dataset = CSIRODataset(train_df, train_transform, overlap_ratio=0)
-    val_dataset = CSIRODataset(val_df, val_transform, overlap_ratio=0)
+    train_dataset = CSIRODataset(config["data_folder"], train_df, train_transform, overlap_ratio=0)
+    val_dataset = CSIRODataset(config["data_folder"], val_df, val_transform, overlap_ratio=0)
 
     model = DinoV3BackBone(
+        model_name=config["model_name"],
         hidden_dim=config["hidden_dim"],
         predict_total=config["predict_total"],
         predict_gdm=config["predict_gdm"],
@@ -349,6 +352,7 @@ if __name__ == '__main__':
     parser.add_argument("--loss_coefficient", type=float, nargs="+")
     parser.add_argument("--wandb_mode", type=str, default="online")
 
+    parser.add_argument("--model_name", type=str, default="facebook/dinov3-vits16-pretrain-lvd1689m")
     parser.add_argument("--predict_total", action="store_true")
     parser.add_argument("--predict_gdm", action="store_true")
     parser.add_argument("--predict_height", action="store_true")
@@ -356,7 +360,7 @@ if __name__ == '__main__':
     parser.add_argument("--freeze_backbone", action="store_true")
     parser.add_argument("--hidden_dim", type=int, default=1024)
 
-    parser.add_argument("--data_path", type=str, default="data/train.csv")
+    parser.add_argument("--data_folder", type=str, default="data")
     args = parser.parse_args()
 
     # Validating loss coefficient
@@ -383,6 +387,7 @@ if __name__ == '__main__':
         "weight_decay": args.weight_decay,
 
         # Model config
+        "model_name": args.model_name,
         "predict_total": args.predict_total,
         "predict_gdm": args.predict_gdm,
         "predict_height": args.predict_height,
@@ -391,7 +396,7 @@ if __name__ == '__main__':
         "hidden_dim": args.hidden_dim,
 
         # Other
-        "data_path": args.data_path,
+        "data_folder": args.data_folder,
         "wandb_mode": args.wandb_mode
     }
     main(config)

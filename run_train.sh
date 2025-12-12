@@ -9,11 +9,12 @@ python train.py \
     --lr 1e-4 \
     --weight_decay 1e-4 \
     --wandb_mode "online" \
-    --loss_coefficient 0.08 0.08 0.08 0.16 0.4 0.1 0.1 \
+    --model_name "facebook/dinov3-vits16-pretrain-lvd1689m" \
+    --loss_coefficient 0.15 0.15 0.15 0.05 0.3 0.1 0.1 \
     --predict_total \
     --predict_height \
     --predict_has_clover \
     --freeze_backbone \
     --hidden_dim 1024 \
-    --data_path "data\train.csv" \
+    --data_folder "data" \
     #--predict_gdm \
