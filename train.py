@@ -92,6 +92,7 @@ class Trainer:
         self.predict_height = config["predict_height"]
         self.predict_has_clover = config["predict_has_clover"]
         self.loss_coefficient = config["loss_coefficient"]
+        self.freeze_backbone = config["freeze_backbone"]
 
         self.train_dataloader = DataLoader(train_dataset, batch_size=self.batch_size, shuffle=True)
         self.val_dataloader = DataLoader(val_dataset, batch_size=self.batch_size, shuffle=False)
@@ -255,9 +256,18 @@ class Trainer:
         return metrics
 
     def train(self):
-        for epoch in range(self.epochs):
-            train_metrics = self.train_one_epoch(epoch + 1)
-            val_metrics, original_mae = self.validation(epoch + 1)
+        for epoch in range(1, self.epochs + 1):
+            # two-stage training to stabilize training
+            if not self.freeze_backbone:
+                if epoch <= 0:
+                    for param in self.model.backbone.parameters():
+                        param.requires_grad = False
+                elif epoch == 1:
+                    for param in self.model.backbone.parameters():
+                        param.requires_grad = True
+
+            train_metrics = self.train_one_epoch(epoch)
+            val_metrics, original_mae = self.validation(epoch)
 
             log = {}
             log.update(self._prefix_metrics(train_metrics, "train"))
