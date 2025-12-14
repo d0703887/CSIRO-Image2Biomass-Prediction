@@ -83,6 +83,8 @@ class Trainer:
     ):
 
         self.timestamp = datetime.now().strftime("%Y%m%d_%H%M")
+        self.project_dir = f"wandb/{self.timestamp}_CSIRO"
+        os.makedirs(self.project_dir, exist_ok=True)
         self.df = df
         self.train_idxs = train_idxs
         self.val_idxs = val_idxs
@@ -136,7 +138,8 @@ class Trainer:
             name=f"{self.timestamp}_CSIRO_{fold_idx}",
             group=f"{self.timestamp}_CSIRO",
             config=self.config,
-            mode=self.wandb_mode
+            mode=self.wandb_mode,
+            dir=self.project_dir
         )
         return wandb_run
 
