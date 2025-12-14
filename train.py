@@ -323,7 +323,7 @@ class Trainer:
                     for param in model.backbone.parameters():
                         param.requires_grad = False
                 # Stage 2: unfreeze backbone and lower lr
-                elif epoch == self.stage2_start_epoch:
+                elif epoch == self.stage2_start_epoch + 1:
                     for param in model.backbone.parameters():
                         param.requires_grad = True
                     for g in optimizer.param_groups:
