@@ -1,7 +1,8 @@
 import torch.nn as nn
 import torch
 from transformers import AutoModel
-
+# from transformers.models.dinov3_vit import DINOv3ViTModel, DINOv3ViTConfig
+# import os, json
 
 class MLP(nn.Module):
     def __init__(
@@ -108,22 +109,23 @@ class DinoV3BackBone(nn.Module):
         total_g = self.sum_tile(tile_total, b)
         gdm_g = self.sum_tile(tile_gdm, b)
 
+        pred_dict = {
+            "Dry_Green_g": green_g,
+            "Dry_Clover_g": clover_g,
+            "Dry_Dead_g": dead_g,
+            "Dry_Total_g": total_g,
+            "GDM_g": gdm_g,
+        }
+
         if self.predict_height:
             real_height = torch.exp(tile_height)
             height = torch.log(real_height.view(b, 2).mean(dim=1))
-        else:
-            height = None
+            pred_dict["Height_Ave_cm"] = height
 
-        has_clover = torch.max(tile_has_clover.view(b, 2), dim=1).values if self.predict_has_clover else None
+        if self.predict_has_clover:
+            has_clover = torch.max(tile_has_clover.view(b, 2), dim=1).values
+            pred_dict["Has_Clover"] = has_clover
 
-        return {
-            "green_g": green_g,
-            "clover_g": clover_g,
-            "dead_g": dead_g,
-            "total_g": total_g,
-            "gdm_g": gdm_g,
-            "height": height,
-            "has_clover": has_clover
-        }
+        return pred_dict
 
 

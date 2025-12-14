@@ -3,6 +3,7 @@ from torchvision.transforms import v2
 import torch
 import pandas as pd
 import os
+from sklearn.model_selection import GroupKFold
 
 
 def make_transform(
@@ -33,3 +34,15 @@ def load_data(data_folder: str):
         columns="target_name",
         values="target").reset_index()
     return pivoted_df
+
+
+def group_k_fold(df: pd.DataFrame):
+    groups = df["State"].astype(str) + "_" + df["Sampling_Date"].astype(str)
+    gkf = GroupKFold(n_splits=6)
+    train_idxs = []
+    val_idxs = []
+    for train_idx, val_idx in gkf.split(df, groups, groups):
+        train_idxs.append(train_idx)
+        val_idxs.append(val_idx)
+
+    return train_idxs, val_idxs
