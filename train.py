@@ -380,11 +380,11 @@ def main(config, mode: str):
         v2.Resize((768, 768), antialias=True),
 
         # Color
-        v2.RandomAutocontrast(p=0.2),
+        # v2.RandomAutocontrast(p=0.2),
         v2.RandomAdjustSharpness(sharpness_factor=1.5, p=0.3),
 
         # Blur
-        v2.RandomApply([v2.GaussianBlur(kernel_size=(3, 3), )], p=0.1),
+        # v2.RandomApply([v2.GaussianBlur(kernel_size=(3, 3), )], p=0.1),
 
         # Normalization
         v2.ToDtype(torch.float32, scale=True),
