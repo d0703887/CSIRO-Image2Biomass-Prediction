@@ -101,6 +101,7 @@ class Trainer:
         self.loss_coefficient = config["loss_coefficient"]
         self.lr = config["lr"]
         self.weight_decay = config["weight_decay"]
+        self.stage2_start_epoch = config["stage2_start_epoch"]
 
         # Model config
         self.model_name = config["model_name"]
@@ -318,11 +319,11 @@ class Trainer:
         for epoch in range(1, self.epochs + 1):
             # two-stage training to stabilize training
             if not self.freeze_backbone:
-                if epoch <= 5:
+                if epoch <= self.stage2_start_epoch:
                     for param in model.backbone.parameters():
                         param.requires_grad = False
                 # Stage 2: unfreeze backbone and lower lr
-                elif epoch == 6:
+                elif epoch == self.stage2_start_epoch:
                     for param in model.backbone.parameters():
                         param.requires_grad = True
                     for g in optimizer.param_groups:
@@ -426,6 +427,8 @@ if __name__ == '__main__':
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--weight_decay", type=float, default=1e-4)
     parser.add_argument("--loss_coefficient", type=float, nargs="+")
+    parser.add_argument("--stage2_start_epoch", type=int, default=10)
+
     parser.add_argument("--wandb_mode", type=str, default="online")
 
     parser.add_argument("--model_name", type=str, default="facebook/dinov3-vits16-pretrain-lvd1689m")
@@ -460,6 +463,7 @@ if __name__ == '__main__':
         "loss_coefficient": loss_coefficient,
         "lr": args.lr,
         "weight_decay": args.weight_decay,
+        "stage2_start_epoch": args.stage2_start_epoch,
 
         # Model config
         "model_name": args.model_name,
