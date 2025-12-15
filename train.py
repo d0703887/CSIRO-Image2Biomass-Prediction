@@ -19,7 +19,7 @@ from utils import load_data, group_k_fold
 
 LOSS_KEYS = [
     "Dry_Green_g", "Dry_Clover_g", "Dry_Dead_g", "GDM_g",
-    "Dry_Total_g", "Height_Ave_cm", "Has_Clover"
+    "Dry_Total_g"
 ]
 
 class CSIRODataset(Dataset):
@@ -61,14 +61,13 @@ class CSIRODataset(Dataset):
         row = self.data_values[idx]
         return {
             "Input_Img": input_img,
-            "Pre_GSHH_NDVI": torch.tensor(row["Pre_GSHH_NDVI"], dtype=torch.float32),
-            "Height_Ave_cm": torch.tensor(row["Height_Ave_cm"], dtype=torch.float32),
+            #"Height_Ave_cm": torch.tensor(row["Height_Ave_cm"], dtype=torch.float32),
             "Dry_Green_g": torch.tensor(row["Dry_Green_g"], dtype=torch.float32),
             "Dry_Clover_g": torch.tensor(row["Dry_Clover_g"], dtype=torch.float32),
             "Dry_Dead_g": torch.tensor(row["Dry_Dead_g"], dtype=torch.float32),
             "Dry_Total_g": torch.tensor(row["Dry_Total_g"], dtype=torch.float32),
             "GDM_g": torch.tensor(row["GDM_g"], dtype=torch.float32),
-            "Has_Clover": torch.tensor(1.0 if "clover" in self.species[idx].lower() else 0.0, dtype=torch.float32)
+            #"Has_Clover": torch.tensor(1.0 if "clover" in self.species[idx].lower() else 0.0, dtype=torch.float32)
         }
 
 class Trainer:
@@ -105,22 +104,15 @@ class Trainer:
 
         # Model config
         self.model_name = config["model_name"]
-        self.predict_total = config["predict_total"]
-        self.predict_gdm = config["predict_gdm"]
-        self.predict_height = config["predict_height"]
-        self.predict_has_clover = config["predict_has_clover"]
         self.freeze_backbone = config["freeze_backbone"]
         self.hidden_dim = config["hidden_dim"]
+        self.log_transform = config["log_transform"]
 
         # Other
         self.data_folder = config["data_folder"]
         self.wandb_mode = config["wandb_mode"]
 
-
-        # self.wandb_run = wandb_run
-
-        # self.optimizer = torch.optim.Adam(model.parameters(), lr=config["lr"], weight_decay=config["weight_decay"])
-        self.regression_loss_fn = nn.MSELoss()
+        self.regression_loss_fn = nn.HuberLoss()
         self.classification_loss_fn = nn.BCELoss()
         self.r2_coeff = {
             "Dry_Green_g": 0.1,
@@ -148,11 +140,8 @@ class Trainer:
         model = DinoV3BackBone(
             model_name=self.model_name,
             hidden_dim=self.hidden_dim,
-            predict_total=self.predict_total,
-            predict_gdm=self.predict_gdm,
-            predict_has_clover=self.predict_has_clover,
-            predict_height=self.predict_height,
             freeze_backbone=self.freeze_backbone,
+            log_transform=self.log_transform
         )
         return model
 
@@ -169,9 +158,11 @@ class Trainer:
         return numerator / denominator
 
     def process_batch(self, model, optimizer, data_dict, is_train=True):
+        # Validation losses are all computed in original scale
         for k, v in data_dict.items():
-            if isinstance(v, torch.Tensor):
-                data_dict[k] = v.to(self.device)
+            if self.log_transform and k != "Input_Img":
+                v = torch.log1p(v)
+            data_dict[k] = v.to(self.device)
 
         if is_train:
             optimizer.zero_grad()
@@ -182,11 +173,16 @@ class Trainer:
         loss_dict = {}
         total_loss = 0
 
+        if not is_train:
+            for k, v in data_dict.items():
+                if self.log_transform and k != "Input_Img":
+                    data_dict[k] = torch.expm1(v)
+            for k, v in pred_dict.items():
+                if self.log_transform:
+                    pred_dict[k] = torch.expm1(v)
+
         for k in pred_dict.keys():
-            if k == "Has_Clover":
-                loss = self.classification_loss_fn(pred_dict[k], data_dict[k])
-            else:
-                loss = self.regression_loss_fn(pred_dict[k], data_dict[k])
+            loss = self.regression_loss_fn(pred_dict[k], data_dict[k])
             loss_dict[k] = loss
             total_loss += loss * self.loss_coefficient[k]
         loss_dict["main_loss"] = total_loss
@@ -201,20 +197,41 @@ class Trainer:
 
         return loss_dict, detached_preds
 
-    def train_one_epoch(self, model, optimizer, train_dataloader, epoch: int):
+    def train_one_epoch(self, model, optimizer, train_dataloader, epoch, global_weighted_mean):
         model.train()
         data_pbar = tqdm(train_dataloader, desc=f"Epoch {epoch}/{self.epochs}: ", position=0)
         loss_accumulator = {}
+        all_preds = {k: [] for k in self.r2_coeff.keys()}
+        all_targets = {k: [] for k in self.r2_coeff.keys()}
+
         for data_dict in data_pbar:
-            loss_dict, _ = self.process_batch(model, optimizer, data_dict)
+            loss_dict, preds = self.process_batch(model, optimizer, data_dict)
             data_pbar.set_postfix({"loss": loss_dict["main_loss"].item()})
 
             for k, v in loss_dict.items():
                 loss_accumulator[k] = loss_accumulator.get(k, 0) + v.item()
 
+            # Compute r2 in original scale
+            for k in self.r2_coeff.keys():
+                if self.log_transform:
+                    all_preds[k].append(torch.expm1(preds[k].cpu()))
+                    all_targets[k].append(torch.expm1(data_dict[k].cpu()))
+                else:
+                    all_preds[k].append(preds[k].cpu())
+                    all_targets[k].append(data_dict[k].cpu())
+
         # Average losses
         avg_losses = {k: v / len(train_dataloader) for k, v in loss_accumulator.items()}
-        return avg_losses
+
+        # Compute R2 on full dataset tensors
+        r2_score, weighted_mse = self.compute_r2(all_preds, all_targets, global_weighted_mean)
+        avg_losses["r2"] = r2_score
+        avg_losses["weighted_mse"] = weighted_mse
+
+        # Build prediction table
+        prediction_tables = self.build_prediction_table(all_preds, all_targets)
+
+        return avg_losses, prediction_tables
 
 
     def validation(self, model, optimizer, val_dataloader, epoch, global_weighted_mean):
@@ -232,6 +249,7 @@ class Trainer:
                 for k, v in loss_dict.items():
                     loss_accumulator[k] = loss_accumulator.get(k, 0) + v.item()
 
+                # Compute r2 in original scale
                 for k in self.r2_coeff.keys():
                     all_preds[k].append(preds[k].cpu())
                     all_targets[k].append(data_dict[k].cpu())
@@ -240,13 +258,19 @@ class Trainer:
         avg_losses = {k: v / len(val_dataloader) for k, v in loss_accumulator.items()}
 
         # Compute R2 on full dataset tensors
-        r2_score = self.compute_r2(all_preds, all_targets, global_weighted_mean)
+        r2_score, weighted_mse = self.compute_r2(all_preds, all_targets, global_weighted_mean)
         avg_losses["r2"] = r2_score
-        return avg_losses
+        avg_losses["weighted_mse"] = weighted_mse
+
+        # Build prediction table
+        prediction_tables = self.build_prediction_table(all_preds, all_targets)
+        return avg_losses, prediction_tables
 
     def compute_r2(self, pred_dict, target_dict, global_weighted_mean):
         numerator = 0
         denominator = 0
+
+        weighted_mse = 0
         for target_name, coeff in self.r2_coeff.items():
             flat_preds = torch.cat(pred_dict[target_name])
             flat_targets = torch.cat(target_dict[target_name])
@@ -257,7 +281,24 @@ class Trainer:
             numerator += coeff * mse
             denominator += coeff * var
 
-        return 1 - (numerator / denominator).item()
+            weighted_mse += coeff * (mse / len(flat_targets))
+
+        return 1 - (numerator / denominator).item(), weighted_mse
+
+    def build_prediction_table(self, pred_dict, target_dict):
+        log_tables = {}
+        for target_name, coeff in self.r2_coeff.items():
+            flat_preds = torch.cat(pred_dict[target_name])
+            flat_targets = torch.cat(target_dict[target_name])
+            df_view = pd.DataFrame({
+                "Target": flat_targets.cpu().numpy(),  # Ensure on CPU
+                "Pred": flat_preds.cpu().numpy(),  # Ensure on CPU
+            })
+            table = wandb.Table(dataframe=df_view.head(50))
+            log_tables[target_name] = table
+
+        return log_tables
+
 
     def _initialize_data(self, fold_idx):
         train_df = self.df.iloc[self.train_idxs[fold_idx]]
@@ -278,12 +319,17 @@ class Trainer:
             pin_memory=True,
             persistent_workers=True
         )
+
+        print(f"Training Data Length: {len(train_df)}")
+        print(f"Validation Data Length: {len(val_df)}")
+
         return train_dataloader, val_dataloader
 
     def train_one_fold(self, fold_idx: int):
         wandb_run = self._initialize_wandb(fold_idx)
         train_dataloader, val_dataloader = self._initialize_data(fold_idx)
-        global_weighted_mean = self._compute_global_mean(val_dataloader.dataset)
+        val_global_weighted_mean = self._compute_global_mean(val_dataloader.dataset)
+        train_gloabl_weighted_mean = self._compute_global_mean(train_dataloader.dataset)
         model = self._initialize_model()
         model.to(self.device)
         optimizer = torch.optim.AdamW(model.parameters(), lr=self.lr, weight_decay=self.weight_decay)
@@ -301,24 +347,32 @@ class Trainer:
                 for g in optimizer.param_groups:
                     g['lr'] = g['lr'] * 0.1
 
-            train_metrics = self.train_one_epoch(model, optimizer, train_dataloader, epoch)
-            val_metrics = self.validation(model, optimizer, val_dataloader, epoch, global_weighted_mean)
+            train_metrics, train_pred_tables = self.train_one_epoch(model, optimizer, train_dataloader, epoch, train_gloabl_weighted_mean)
+            val_metrics, val_pred_tables = self.validation(model, optimizer, val_dataloader, epoch, val_global_weighted_mean)
 
             log = {}
             log.update(self._prefix_metrics(train_metrics, "train"))
             log.update(self._prefix_metrics(val_metrics, "val"))
+            log.update(self._prefix_metrics(train_pred_tables, "Train_Pred"))
+            log.update(self._prefix_metrics(val_pred_tables, "val_Pred"))
 
             wandb_run.log(log, step=epoch)
 
-            print(f"Epoch {epoch}/{self.epochs}: Train Loss={train_metrics['main_loss']:.4f}, Val R2={val_metrics['r2']:.4f}")
+            print(f"{'=' * 45}")
+            print(f"║ EPOCH {epoch:02d}/{self.epochs:02d} SUMMARY")
+            print(f"{'-' * 45}")
+            print(f"║ {'Metric':<12} │ {'Train':^10} │ {'Val':^10}")
+            print(f"{'-' * 45}")
+            print(f"║ {'Main Loss':<12} │ {train_metrics['main_loss']:^10.4f} │ {val_metrics['main_loss']:^10.4f}")
+            print(f"║ {'R2 Score':<12} │ {train_metrics['r2']:^10.4f} │ {val_metrics['r2']:^10.4f}")
+            print(f"{'=' * 45}")
 
             cur_r2 = val_metrics["r2"]
             if cur_r2 > best_val_r2:
                 best_val_r2 = cur_r2
-                save_dir = os.path.join(wandb_run.dir, str(fold_idx))
-                os.makedirs(save_dir, exist_ok=True)
-                torch.save(model.state_dict(), os.path.join(save_dir, f"best_model_{best_val_r2:.3f}.pth"))
+                torch.save(model.state_dict(), os.path.join(wandb_run.dir, f"{fold_idx}_best_model_{best_val_r2:.3f}.pth"))
                 print(f"New best model saved! (R2: {best_val_r2:.4f})")
+
         wandb_run.finish()
         return best_val_r2
 
@@ -402,16 +456,12 @@ if __name__ == '__main__':
     parser.add_argument("--weight_decay", type=float, default=1e-4)
     parser.add_argument("--loss_coefficient", type=float, nargs="+")
     parser.add_argument("--stage2_start_epoch", type=int, default=10)
-
     parser.add_argument("--wandb_mode", type=str, default="online")
 
     parser.add_argument("--model_name", type=str, default="facebook/dinov3-vits16-pretrain-lvd1689m")
-    parser.add_argument("--predict_total", action="store_true")
-    parser.add_argument("--predict_gdm", action="store_true")
-    parser.add_argument("--predict_height", action="store_true")
-    parser.add_argument("--predict_has_clover", action="store_true")
     parser.add_argument("--freeze_backbone", action="store_true")
     parser.add_argument("--hidden_dim", type=int, default=1024)
+    parser.add_argument("--log_transform", action="store_true")
 
     parser.add_argument("--data_folder", type=str, default="data")
     parser.add_argument("--mode", type=str, default="single-fold")
@@ -441,12 +491,9 @@ if __name__ == '__main__':
 
         # Model config
         "model_name": args.model_name,
-        "predict_total": args.predict_total,
-        "predict_gdm": args.predict_gdm,
-        "predict_height": args.predict_height,
-        "predict_has_clover": args.predict_has_clover,
         "freeze_backbone": args.freeze_backbone,
         "hidden_dim": args.hidden_dim,
+        "log_transform": args.log_transform,
 
         # Other
         "data_folder": args.data_folder,

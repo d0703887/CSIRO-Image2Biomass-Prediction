@@ -37,7 +37,8 @@ def load_data(data_folder: str):
 
 
 def group_k_fold(df: pd.DataFrame):
-    groups = df["State"].astype(str) + "_" + df["Sampling_Date"].astype(str)
+    #groups = df["State"].astype(str) + "_" + df["Sampling_Date"].astype(str)
+    groups = df["Sampling_Date"]
     gkf = GroupKFold(n_splits=6)
     train_idxs = []
     val_idxs = []
