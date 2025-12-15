@@ -62,12 +62,12 @@ class CSIRODataset(Dataset):
         return {
             "Input_Img": input_img,
             "Pre_GSHH_NDVI": torch.tensor(row["Pre_GSHH_NDVI"], dtype=torch.float32),
-            "Height_Ave_cm": torch.tensor(np.log(row["Height_Ave_cm"]), dtype=torch.float32),
-            "Dry_Green_g": torch.tensor(np.log(1 + row["Dry_Green_g"]), dtype=torch.float32),
-            "Dry_Clover_g": torch.tensor(np.log(1 + row["Dry_Clover_g"]), dtype=torch.float32),
-            "Dry_Dead_g": torch.tensor(np.log(1 + row["Dry_Dead_g"]), dtype=torch.float32),
-            "Dry_Total_g": torch.tensor(np.log(1 + row["Dry_Total_g"]), dtype=torch.float32),
-            "GDM_g": torch.tensor(np.log(1 + row["GDM_g"]), dtype=torch.float32),
+            "Height_Ave_cm": torch.tensor(row["Height_Ave_cm"], dtype=torch.float32),
+            "Dry_Green_g": torch.tensor(row["Dry_Green_g"], dtype=torch.float32),
+            "Dry_Clover_g": torch.tensor(row["Dry_Clover_g"], dtype=torch.float32),
+            "Dry_Dead_g": torch.tensor(row["Dry_Dead_g"], dtype=torch.float32),
+            "Dry_Total_g": torch.tensor(row["Dry_Total_g"], dtype=torch.float32),
+            "GDM_g": torch.tensor(row["GDM_g"], dtype=torch.float32),
             "Has_Clover": torch.tensor(1.0 if "clover" in self.species[idx].lower() else 0.0, dtype=torch.float32)
         }
 
@@ -242,49 +242,22 @@ class Trainer:
         # Compute R2 on full dataset tensors
         r2_score = self.compute_r2(all_preds, all_targets, global_weighted_mean)
         avg_losses["r2"] = r2_score
-
-        original_mae = self.compute_orig_scale_metrics(all_preds, all_targets)
-        return avg_losses, original_mae
+        return avg_losses
 
     def compute_r2(self, pred_dict, target_dict, global_weighted_mean):
         numerator = 0
         denominator = 0
-        # Transform log scale to normal range
         for target_name, coeff in self.r2_coeff.items():
             flat_preds = torch.cat(pred_dict[target_name])
             flat_targets = torch.cat(target_dict[target_name])
 
-            mse = torch.sum(((torch.exp(flat_targets) - 1) - (torch.exp(flat_preds) - 1)) ** 2)
-            var = torch.sum(((torch.exp(flat_targets) - 1) - global_weighted_mean) ** 2)
+            mse = torch.sum((flat_targets - flat_preds) ** 2)
+            var = torch.sum((flat_targets - global_weighted_mean) ** 2)
 
             numerator += coeff * mse
             denominator += coeff * var
 
         return 1 - (numerator / denominator).item()
-
-    def compute_orig_scale_metrics(self, pred_dict, target_dict):
-        """
-        Computes MAE in the original units (grams, cm).
-        """
-        metrics = {}
-        for key, preds in pred_dict.items():
-            flat_preds = torch.cat(preds)
-            flat_targets = torch.cat(target_dict[key])
-
-            # Inverse Transform Logic
-            if key in ["Dry_Green_g", "Dry_Clover_g", "Dry_Dead_g", "Dry_Total_g", "GDM_g"]:
-                # Dataset used: np.log(1 + x) -> Inverse: exp(x) - 1
-                real_pred = torch.exp(flat_preds) - 1
-                real_target = torch.exp(flat_targets) - 1
-
-            else:
-                continue
-
-            # Compute MAE (Mean Absolute Error)
-            mae = torch.mean(torch.abs(real_pred - real_target))
-            metrics[key] = mae.item()
-
-        return metrics
 
     def _initialize_data(self, fold_idx):
         train_df = self.df.iloc[self.train_idxs[fold_idx]]
@@ -313,29 +286,27 @@ class Trainer:
         global_weighted_mean = self._compute_global_mean(val_dataloader.dataset)
         model = self._initialize_model()
         model.to(self.device)
-        optimizer = torch.optim.Adam(model.parameters(), lr=self.lr, weight_decay=self.weight_decay)
+        optimizer = torch.optim.AdamW(model.parameters(), lr=self.lr, weight_decay=self.weight_decay)
         best_val_r2 = -float("inf")
 
         for epoch in range(1, self.epochs + 1):
-            # two-stage training to stabilize training
-            if not self.freeze_backbone:
-                if epoch <= self.stage2_start_epoch:
-                    for param in model.backbone.parameters():
-                        param.requires_grad = False
-                # Stage 2: unfreeze backbone and lower lr
-                elif epoch == self.stage2_start_epoch + 1:
-                    for param in model.backbone.parameters():
-                        param.requires_grad = True
-                    for g in optimizer.param_groups:
-                        g['lr'] = g['lr'] * 0.1
+            # Stage 1: freeze backbone
+            if not self.freeze_backbone and epoch == 1:
+                for param in model.backbone.parameters():
+                    param.requires_grad = False
+            # Stage 2: unfreeze backbone and lower lr
+            if not self.freeze_backbone and epoch == self.stage2_start_epoch + 1:
+                for param in model.backbone.parameters():
+                    param.requires_grad = True
+                for g in optimizer.param_groups:
+                    g['lr'] = g['lr'] * 0.1
 
             train_metrics = self.train_one_epoch(model, optimizer, train_dataloader, epoch)
-            val_metrics, original_mae = self.validation(model, optimizer, val_dataloader, epoch, global_weighted_mean)
+            val_metrics = self.validation(model, optimizer, val_dataloader, epoch, global_weighted_mean)
 
             log = {}
             log.update(self._prefix_metrics(train_metrics, "train"))
             log.update(self._prefix_metrics(val_metrics, "val"))
-            log.update(self._prefix_metrics(original_mae, "orig_MAE"))
 
             wandb_run.log(log, step=epoch)
 
@@ -379,12 +350,15 @@ def main(config, mode: str):
 
         v2.Resize((768, 768), antialias=True),
 
-        # Color
-        # v2.RandomAutocontrast(p=0.2),
-        v2.RandomAdjustSharpness(sharpness_factor=1.5, p=0.3),
-
-        # Blur
-        # v2.RandomApply([v2.GaussianBlur(kernel_size=(3, 3), )], p=0.1),
+        # # Color
+        # v2.RandomApply([
+        #     v2.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.4, hue=0.05)
+        # ], p=0.8),  # High probability!
+        # # v2.RandomAutocontrast(p=0.3),
+        # v2.RandomAdjustSharpness(sharpness_factor=1.5, p=0.5),
+        #
+        # # Blur
+        # v2.RandomApply([v2.GaussianBlur(kernel_size=(11, 11), )], p=0.3),
 
         # Normalization
         v2.ToDtype(torch.float32, scale=True),
