@@ -19,7 +19,7 @@ class MLP(nn.Module):
             nn.SiLU(),
             nn.Dropout(dropout),
             nn.Linear(hidden_dim, output_dim),
-            nn.Sigmoid() if classification else nn.Softplus()
+            nn.Sigmoid() if classification else nn.LeakyReLU(negative_slope=0.01)
         )
 
     def forward(self, x):

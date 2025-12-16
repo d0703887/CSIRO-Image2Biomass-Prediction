@@ -151,11 +151,14 @@ class Trainer:
     def _compute_global_mean(self, dataset):
         numerator = 0
         denominator = 0
+        global_means = {k: 0 for k in self.r2_coeff.keys()}
         for row in dataset.data_values:
-            for target_name, coeff in self.r2_coeff.items():
-                numerator += coeff * row[target_name]
-                denominator += coeff
-        return numerator / denominator
+            for target_name, _ in self.r2_coeff.items():
+                global_means[target_name] += row[target_name]
+        for k in global_means.keys():
+            global_means[k] /= len(dataset.data_values)
+
+        return global_means
 
     def process_batch(self, model, optimizer, data_dict, is_train=True):
         # Validation losses are all computed in original scale
@@ -197,7 +200,7 @@ class Trainer:
 
         return loss_dict, detached_preds
 
-    def train_one_epoch(self, model, optimizer, train_dataloader, epoch, global_weighted_mean):
+    def train_one_epoch(self, model, optimizer, train_dataloader, epoch, weighted_mean):
         model.train()
         data_pbar = tqdm(train_dataloader, desc=f"Epoch {epoch}/{self.epochs}: ", position=0)
         loss_accumulator = {}
@@ -224,9 +227,8 @@ class Trainer:
         avg_losses = {k: v / len(train_dataloader) for k, v in loss_accumulator.items()}
 
         # Compute R2 on full dataset tensors
-        r2_score, weighted_mse = self.compute_r2(all_preds, all_targets, global_weighted_mean)
+        r2_score = self.compute_r2(all_preds, all_targets, weighted_mean)
         avg_losses["r2"] = r2_score
-        avg_losses["weighted_mse"] = weighted_mse
 
         # Build prediction table
         prediction_tables = self.build_prediction_table(all_preds, all_targets)
@@ -234,7 +236,7 @@ class Trainer:
         return avg_losses, prediction_tables
 
 
-    def validation(self, model, optimizer, val_dataloader, epoch, global_weighted_mean):
+    def validation(self, model, optimizer, val_dataloader, epoch, weighted_mean):
         model.eval()
         data_pbar = tqdm(val_dataloader, desc=f"Epoch {epoch}/{self.epochs}: ", position=0)
         loss_accumulator = {}
@@ -258,32 +260,27 @@ class Trainer:
         avg_losses = {k: v / len(val_dataloader) for k, v in loss_accumulator.items()}
 
         # Compute R2 on full dataset tensors
-        r2_score, weighted_mse = self.compute_r2(all_preds, all_targets, global_weighted_mean)
+        r2_score = self.compute_r2(all_preds, all_targets, weighted_mean)
         avg_losses["r2"] = r2_score
-        avg_losses["weighted_mse"] = weighted_mse
 
         # Build prediction table
         prediction_tables = self.build_prediction_table(all_preds, all_targets)
         return avg_losses, prediction_tables
 
-    def compute_r2(self, pred_dict, target_dict, global_weighted_mean):
-        numerator = 0
-        denominator = 0
-
-        weighted_mse = 0
+    # Use standard r2 score instead of competition's r2 score
+    def compute_r2(self, pred_dict, target_dict, weighted_mean):
+        global_r2 = 0
         for target_name, coeff in self.r2_coeff.items():
             flat_preds = torch.cat(pred_dict[target_name])
             flat_targets = torch.cat(target_dict[target_name])
 
             mse = torch.sum((flat_targets - flat_preds) ** 2)
-            var = torch.sum((flat_targets - global_weighted_mean) ** 2)
+            var = torch.sum((flat_targets - weighted_mean[target_name]) ** 2)
 
-            numerator += coeff * mse
-            denominator += coeff * var
+            local_r2 = 1 - mse / var
+            global_r2 += coeff * local_r2
 
-            weighted_mse += coeff * (mse / len(flat_targets))
-
-        return 1 - (numerator / denominator).item(), weighted_mse
+        return global_r2.item()
 
     def build_prediction_table(self, pred_dict, target_dict):
         log_tables = {}
@@ -294,7 +291,7 @@ class Trainer:
                 "Target": flat_targets.cpu().numpy(),  # Ensure on CPU
                 "Pred": flat_preds.cpu().numpy(),  # Ensure on CPU
             })
-            table = wandb.Table(dataframe=df_view.head(50))
+            table = wandb.Table(dataframe=df_view)
             log_tables[target_name] = table
 
         return log_tables
@@ -328,8 +325,8 @@ class Trainer:
     def train_one_fold(self, fold_idx: int):
         wandb_run = self._initialize_wandb(fold_idx)
         train_dataloader, val_dataloader = self._initialize_data(fold_idx)
-        val_global_weighted_mean = self._compute_global_mean(val_dataloader.dataset)
-        train_gloabl_weighted_mean = self._compute_global_mean(train_dataloader.dataset)
+        val_weighted_mean = self._compute_global_mean(val_dataloader.dataset)
+        train_weighted_mean = self._compute_global_mean(train_dataloader.dataset)
         model = self._initialize_model()
         model.to(self.device)
         optimizer = torch.optim.AdamW(model.parameters(), lr=self.lr, weight_decay=self.weight_decay)
@@ -347,8 +344,8 @@ class Trainer:
                 for g in optimizer.param_groups:
                     g['lr'] = g['lr'] * 0.1
 
-            train_metrics, train_pred_tables = self.train_one_epoch(model, optimizer, train_dataloader, epoch, train_gloabl_weighted_mean)
-            val_metrics, val_pred_tables = self.validation(model, optimizer, val_dataloader, epoch, val_global_weighted_mean)
+            train_metrics, train_pred_tables = self.train_one_epoch(model, optimizer, train_dataloader, epoch, train_weighted_mean)
+            val_metrics, val_pred_tables = self.validation(model, optimizer, val_dataloader, epoch, val_weighted_mean)
 
             log = {}
             log.update(self._prefix_metrics(train_metrics, "train"))
