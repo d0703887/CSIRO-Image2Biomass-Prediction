@@ -6,6 +6,8 @@ from torchvision.io import read_image
 from tqdm import tqdm
 import wandb
 from sklearn.model_selection import train_test_split
+from rich.console import Console
+from rich.table import Table
 
 import pandas as pd
 import os
@@ -227,8 +229,8 @@ class Trainer:
         avg_losses = {k: v / len(train_dataloader) for k, v in loss_accumulator.items()}
 
         # Compute R2 on full dataset tensors
-        r2_score = self.compute_r2(all_preds, all_targets, weighted_mean)
-        avg_losses["r2"] = r2_score
+        r2_scores = self.compute_r2(all_preds, all_targets, weighted_mean)
+        avg_losses.update(r2_scores)
 
         # Build prediction table
         prediction_tables = self.build_prediction_table(all_preds, all_targets)
@@ -260,8 +262,8 @@ class Trainer:
         avg_losses = {k: v / len(val_dataloader) for k, v in loss_accumulator.items()}
 
         # Compute R2 on full dataset tensors
-        r2_score = self.compute_r2(all_preds, all_targets, weighted_mean)
-        avg_losses["r2"] = r2_score
+        r2_scores = self.compute_r2(all_preds, all_targets, weighted_mean)
+        avg_losses.update(r2_scores)
 
         # Build prediction table
         prediction_tables = self.build_prediction_table(all_preds, all_targets)
@@ -269,7 +271,7 @@ class Trainer:
 
     # Use standard r2 score instead of competition's r2 score
     def compute_r2(self, pred_dict, target_dict, weighted_mean):
-        global_r2 = 0
+        r2_scores =  {"r2": 0}
         for target_name, coeff in self.r2_coeff.items():
             flat_preds = torch.cat(pred_dict[target_name])
             flat_targets = torch.cat(target_dict[target_name])
@@ -277,10 +279,11 @@ class Trainer:
             mse = torch.sum((flat_targets - flat_preds) ** 2)
             var = torch.sum((flat_targets - weighted_mean[target_name]) ** 2)
 
-            local_r2 = 1 - mse / var
-            global_r2 += coeff * local_r2
+            r2 = 1 - mse / var
+            r2_scores[f"{target_name}_r2"] = r2
+            r2_scores["r2"] += coeff * r2
 
-        return global_r2.item()
+        return r2_scores
 
     def build_prediction_table(self, pred_dict, target_dict):
         log_tables = {}
@@ -331,13 +334,15 @@ class Trainer:
         model.to(self.device)
         optimizer = torch.optim.AdamW(model.parameters(), lr=self.lr, weight_decay=self.weight_decay)
         best_val_r2 = -float("inf")
+        console = Console()
 
         for epoch in range(1, self.epochs + 1):
+            # Two-Stage Training
             # Stage 1: freeze backbone
+            # Stage 2: unfreeze backbone and lower lr
             if not self.freeze_backbone and epoch == 1:
                 for param in model.backbone.parameters():
                     param.requires_grad = False
-            # Stage 2: unfreeze backbone and lower lr
             if not self.freeze_backbone and epoch == self.stage2_start_epoch + 1:
                 for param in model.backbone.parameters():
                     param.requires_grad = True
@@ -352,18 +357,40 @@ class Trainer:
             log.update(self._prefix_metrics(val_metrics, "val"))
             log.update(self._prefix_metrics(train_pred_tables, "Train_Pred"))
             log.update(self._prefix_metrics(val_pred_tables, "val_Pred"))
-
             wandb_run.log(log, step=epoch)
 
-            print(f"{'=' * 45}")
-            print(f"║ EPOCH {epoch:02d}/{self.epochs:02d} SUMMARY")
-            print(f"{'-' * 45}")
-            print(f"║ {'Metric':<12} │ {'Train':^10} │ {'Val':^10}")
-            print(f"{'-' * 45}")
-            print(f"║ {'Main Loss':<12} │ {train_metrics['main_loss']:^10.4f} │ {val_metrics['main_loss']:^10.4f}")
-            print(f"║ {'R2 Score':<12} │ {train_metrics['r2']:^10.4f} │ {val_metrics['r2']:^10.4f}")
-            print(f"{'=' * 45}")
+            # Logging
+            table = Table(title=f"Epoch {epoch:02d}/{self.epochs:02d} Summary", show_header=True,
+                          header_style="bold magenta")
 
+            # Add Columns
+            table.add_column("Metric", style="cyan", no_wrap=True)
+            table.add_column("Train", justify="right", style="red")
+            table.add_column("Val", justify="right", style="red")
+
+            # Add Main Rows
+            table.add_row("Main Loss", f"{train_metrics['main_loss']:.4f}", f"{val_metrics['main_loss']:.4f}")
+            table.add_row("R2 Score (Weighted)", f"{train_metrics['r2']:.4f}", f"{val_metrics['r2']:.4f}")
+
+            # Add Separator
+            table.add_section()
+
+            # Add Per-Target R2 Rows
+            # We iterate over your R2 keys to get individual scores
+            for target in self.r2_coeff.keys():
+                key = f"{target}_r2"
+                train_score = train_metrics.get(key, 0.0)
+                val_score = val_metrics.get(key, 0.0)
+
+                # Color code negative R2s to make them stand out
+                t_str = f"[bold red]{train_score:.4f}[/]" if train_score < 0 else f"{train_score:.4f}"
+                v_str = f"[bold red]{val_score:.4f}[/]" if val_score < 0 else f"{val_score:.4f}"
+
+                table.add_row(f"{target} R2", t_str, v_str)
+
+            console.print(table)
+
+            # Save model
             cur_r2 = val_metrics["r2"]
             if cur_r2 > best_val_r2:
                 best_val_r2 = cur_r2

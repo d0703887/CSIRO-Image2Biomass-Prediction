@@ -11,7 +11,6 @@ class MLP(nn.Module):
             hidden_dim: int,
             output_dim: int = 1,
             dropout: float = 0.2,
-            classification: bool = False
     ):
         super().__init__()
         self.mlp = nn.Sequential(
@@ -19,8 +18,12 @@ class MLP(nn.Module):
             nn.SiLU(),
             nn.Dropout(dropout),
             nn.Linear(hidden_dim, output_dim),
-            nn.Sigmoid() if classification else nn.LeakyReLU(negative_slope=0.01)
+            nn.Softplus()
         )
+
+        # Initialize the final linear layer to stabilize training
+        nn.init.normal_(self.mlp[-2].weight, mean=0.0, std=1e-5)
+        nn.init.constant_(self.mlp[-2].bias, -5.0)
 
     def forward(self, x):
         return self.mlp(x)
@@ -35,23 +38,29 @@ class DinoV3BackBone(nn.Module):
     ):
         super().__init__()
         self.log_transform = log_transform
-
+        self.freeze_backbone = freeze_backbone
         # DinoV3
         self.backbone = AutoModel.from_pretrained(
             model_name,
             device_map="auto"
         )
         self.backbone_embed_dim = self.backbone.config.hidden_size
-        if freeze_backbone:
+        if self.freeze_backbone:
             for param in self.backbone.parameters():
                 param.requires_grad = False
             self.backbone.eval()
 
         # Regression/Classification head
-        make_head = lambda classification: MLP(self.backbone_embed_dim, hidden_dim, classification=classification)
-        self.green_mlp = make_head(False)
-        self.clover_mlp = make_head(False)
-        self.dead_mlp = make_head(False)
+        make_head = lambda: MLP(self.backbone_embed_dim, hidden_dim)
+        self.green_mlp = make_head()
+        self.clover_mlp = make_head()
+        self.dead_mlp = make_head()
+
+    def train(self, mode=True):
+        super().train(mode)
+        if self.freeze_backbone:
+            self.backbone.eval()
+        return self
 
     def aggregate_tile(self, tile_data):
         _, num_patch, _ = tile_data.shape
