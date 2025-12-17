@@ -14,4 +14,3 @@ python train.py \
     --data_folder "data" \
     --mode "single-fold" \
     #--stage2_start_epoch 10
-    #--log_transform

@@ -11,6 +11,7 @@ class MLP(nn.Module):
             hidden_dim: int,
             output_dim: int = 1,
             dropout: float = 0.2,
+            mode: str = "biomass"
     ):
         super().__init__()
         self.mlp = nn.Sequential(
@@ -18,12 +19,13 @@ class MLP(nn.Module):
             nn.SiLU(),
             nn.Dropout(dropout),
             nn.Linear(hidden_dim, output_dim),
-            nn.Softplus()
+            nn.Softplus() if mode == "biomass" else nn.Sigmoid()
         )
 
         # Initialize the final linear layer to stabilize training
-        nn.init.normal_(self.mlp[-2].weight, mean=0.0, std=1e-5)
-        nn.init.constant_(self.mlp[-2].bias, -5.0)
+        if mode == "biomass":
+            nn.init.normal_(self.mlp[-2].weight, mean=0.0, std=1e-5)
+            nn.init.constant_(self.mlp[-2].bias, -5.0)
 
     def forward(self, x):
         return self.mlp(x)
@@ -34,11 +36,10 @@ class DinoV3BackBone(nn.Module):
             model_name: str,
             hidden_dim: int,
             freeze_backbone: bool = True,
-            log_transform: bool = False
     ):
         super().__init__()
-        self.log_transform = log_transform
         self.freeze_backbone = freeze_backbone
+
         # DinoV3
         self.backbone = AutoModel.from_pretrained(
             model_name,
@@ -51,10 +52,17 @@ class DinoV3BackBone(nn.Module):
             self.backbone.eval()
 
         # Regression/Classification head
-        make_head = lambda: MLP(self.backbone_embed_dim, hidden_dim)
-        self.green_mlp = make_head()
-        self.clover_mlp = make_head()
-        self.dead_mlp = make_head()
+        make_head = lambda mode: MLP(self.backbone_embed_dim, hidden_dim, mode=mode)
+        self.green_mlp = make_head("biomass")
+        self.clover_mlp = make_head("biomass")
+        self.dead_mlp = make_head("biomass")
+
+        # Gate MLP to prevent noise-cumulation
+        self.green_gate = make_head("gate")
+        self.clover_gate = make_head("gate")
+        self.dead_gate = make_head("gate")
+
+
 
     def train(self, mode=True):
         super().train(mode)
@@ -64,21 +72,17 @@ class DinoV3BackBone(nn.Module):
 
     def aggregate_tile(self, tile_data):
         _, num_patch, _ = tile_data.shape
-        real_data = torch.expm1(tile_data) if self.log_transform else tile_data
-        real_data = real_data.view(-1, 2, num_patch)
-        agg = real_data.sum(dim=(1, 2))
-        if self.log_transform:
-            agg = torch.log1p(agg)
+        tile_data = tile_data.view(-1, 2, num_patch)
+        agg = tile_data.sum(dim=(1, 2))
         return agg
 
-    def forward(self, x):
+    def forward(self, x, return_patch_preds=False):
         """
 
         :param x: shape (B * 2, C, H, W)
         :return: preds
         """
         vit_feature = self.backbone(x) # (B * 2, embed_dim)
-        # global_feature = vit_feature.pooler_output # (B * 2, embed_dim)
         patch_feature = vit_feature.last_hidden_state[:, 5:, :] # (B * 2, num_patch, embed_dim)
 
         # (B * 2, num_patch, 1)
@@ -86,20 +90,16 @@ class DinoV3BackBone(nn.Module):
         tile_clover = self.clover_mlp(patch_feature)
         tile_dead = self.dead_mlp(patch_feature)
 
-        if self.log_transform:
-            # Tile total
-            real_tile_green = torch.expm1(tile_green)
-            real_tile_clover = torch.expm1(tile_clover)
-            real_tile_dead = torch.expm1(tile_dead)
-            real_tile_total = real_tile_green + real_tile_clover + real_tile_dead
-            tile_total = torch.log1p(real_tile_total)
+        # Gating
+        tile_green_gate = self.green_gate(patch_feature)
+        tile_clover_gate = self.clover_gate(patch_feature)
+        tile_dead_gate = self.dead_gate(patch_feature)
+        tile_green = tile_green * tile_green_gate
+        tile_clover = tile_clover * tile_clover_gate
+        tile_dead = tile_dead * tile_dead_gate
 
-            # Tile GDM
-            real_tile_gdm = real_tile_green + real_tile_clover
-            tile_gdm = torch.log1p(real_tile_gdm)
-        else:
-            tile_total = tile_green + tile_clover + tile_dead
-            tile_gdm = tile_green + tile_clover
+        tile_total = tile_green + tile_clover + tile_dead
+        tile_gdm = tile_green + tile_clover
 
         # Aggregation
         green_g = self.aggregate_tile(tile_green)
@@ -115,5 +115,13 @@ class DinoV3BackBone(nn.Module):
             "Dry_Total_g": total_g,
             "GDM_g": gdm_g,
         }
+
+        if return_patch_preds:
+            pred_dict.update({
+                "Tile_Dry_Green_g": tile_green,
+                "Tile_Dry_Clover_g": tile_clover,
+                "Tile_Dry_Dead_g": tile_dead
+            })
+
         return pred_dict
 

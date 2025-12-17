@@ -108,7 +108,6 @@ class Trainer:
         self.model_name = config["model_name"]
         self.freeze_backbone = config["freeze_backbone"]
         self.hidden_dim = config["hidden_dim"]
-        self.log_transform = config["log_transform"]
 
         # Other
         self.data_folder = config["data_folder"]
@@ -143,7 +142,6 @@ class Trainer:
             model_name=self.model_name,
             hidden_dim=self.hidden_dim,
             freeze_backbone=self.freeze_backbone,
-            log_transform=self.log_transform
         )
         return model
 
@@ -151,8 +149,6 @@ class Trainer:
         return {f"{prefix}/{k}": v for k, v in metrics.items()}
 
     def _compute_global_mean(self, dataset):
-        numerator = 0
-        denominator = 0
         global_means = {k: 0 for k in self.r2_coeff.keys()}
         for row in dataset.data_values:
             for target_name, _ in self.r2_coeff.items():
@@ -163,10 +159,7 @@ class Trainer:
         return global_means
 
     def process_batch(self, model, optimizer, data_dict, is_train=True):
-        # Validation losses are all computed in original scale
         for k, v in data_dict.items():
-            if self.log_transform and k != "Input_Img":
-                v = torch.log1p(v)
             data_dict[k] = v.to(self.device)
 
         if is_train:
@@ -177,14 +170,6 @@ class Trainer:
 
         loss_dict = {}
         total_loss = 0
-
-        if not is_train:
-            for k, v in data_dict.items():
-                if self.log_transform and k != "Input_Img":
-                    data_dict[k] = torch.expm1(v)
-            for k, v in pred_dict.items():
-                if self.log_transform:
-                    pred_dict[k] = torch.expm1(v)
 
         for k in pred_dict.keys():
             loss = self.regression_loss_fn(pred_dict[k], data_dict[k])
@@ -202,7 +187,7 @@ class Trainer:
 
         return loss_dict, detached_preds
 
-    def train_one_epoch(self, model, optimizer, train_dataloader, epoch, weighted_mean):
+    def train_one_epoch(self, model, optimizer, train_dataloader, epoch, global_mean):
         model.train()
         data_pbar = tqdm(train_dataloader, desc=f"Epoch {epoch}/{self.epochs}: ", position=0)
         loss_accumulator = {}
@@ -216,20 +201,15 @@ class Trainer:
             for k, v in loss_dict.items():
                 loss_accumulator[k] = loss_accumulator.get(k, 0) + v.item()
 
-            # Compute r2 in original scale
             for k in self.r2_coeff.keys():
-                if self.log_transform:
-                    all_preds[k].append(torch.expm1(preds[k].cpu()))
-                    all_targets[k].append(torch.expm1(data_dict[k].cpu()))
-                else:
-                    all_preds[k].append(preds[k].cpu())
-                    all_targets[k].append(data_dict[k].cpu())
+                all_preds[k].append(preds[k].cpu())
+                all_targets[k].append(data_dict[k].cpu())
 
         # Average losses
         avg_losses = {k: v / len(train_dataloader) for k, v in loss_accumulator.items()}
 
         # Compute R2 on full dataset tensors
-        r2_scores = self.compute_r2(all_preds, all_targets, weighted_mean)
+        r2_scores = self.compute_r2(all_preds, all_targets, global_mean)
         avg_losses.update(r2_scores)
 
         # Build prediction table
@@ -238,7 +218,7 @@ class Trainer:
         return avg_losses, prediction_tables
 
 
-    def validation(self, model, optimizer, val_dataloader, epoch, weighted_mean):
+    def validation(self, model, optimizer, val_dataloader, epoch, global_mean):
         model.eval()
         data_pbar = tqdm(val_dataloader, desc=f"Epoch {epoch}/{self.epochs}: ", position=0)
         loss_accumulator = {}
@@ -253,7 +233,6 @@ class Trainer:
                 for k, v in loss_dict.items():
                     loss_accumulator[k] = loss_accumulator.get(k, 0) + v.item()
 
-                # Compute r2 in original scale
                 for k in self.r2_coeff.keys():
                     all_preds[k].append(preds[k].cpu())
                     all_targets[k].append(data_dict[k].cpu())
@@ -262,7 +241,7 @@ class Trainer:
         avg_losses = {k: v / len(val_dataloader) for k, v in loss_accumulator.items()}
 
         # Compute R2 on full dataset tensors
-        r2_scores = self.compute_r2(all_preds, all_targets, weighted_mean)
+        r2_scores = self.compute_r2(all_preds, all_targets, global_mean)
         avg_losses.update(r2_scores)
 
         # Build prediction table
@@ -328,8 +307,8 @@ class Trainer:
     def train_one_fold(self, fold_idx: int):
         wandb_run = self._initialize_wandb(fold_idx)
         train_dataloader, val_dataloader = self._initialize_data(fold_idx)
-        val_weighted_mean = self._compute_global_mean(val_dataloader.dataset)
-        train_weighted_mean = self._compute_global_mean(train_dataloader.dataset)
+        val_global_mean = self._compute_global_mean(val_dataloader.dataset)
+        train_global_mean = self._compute_global_mean(train_dataloader.dataset)
         model = self._initialize_model()
         model.to(self.device)
         optimizer = torch.optim.AdamW(model.parameters(), lr=self.lr, weight_decay=self.weight_decay)
@@ -349,8 +328,8 @@ class Trainer:
                 for g in optimizer.param_groups:
                     g['lr'] = g['lr'] * 0.1
 
-            train_metrics, train_pred_tables = self.train_one_epoch(model, optimizer, train_dataloader, epoch, train_weighted_mean)
-            val_metrics, val_pred_tables = self.validation(model, optimizer, val_dataloader, epoch, val_weighted_mean)
+            train_metrics, train_pred_tables = self.train_one_epoch(model, optimizer, train_dataloader, epoch, train_global_mean)
+            val_metrics, val_pred_tables = self.validation(model, optimizer, val_dataloader, epoch, val_global_mean)
 
             log = {}
             log.update(self._prefix_metrics(train_metrics, "train"))
@@ -428,15 +407,15 @@ def main(config, mode: str):
 
         v2.Resize((768, 768), antialias=True),
 
-        # # Color
+        # Color
         # v2.RandomApply([
         #     v2.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.4, hue=0.05)
-        # ], p=0.8),  # High probability!
-        # # v2.RandomAutocontrast(p=0.3),
-        # v2.RandomAdjustSharpness(sharpness_factor=1.5, p=0.5),
-        #
-        # # Blur
-        # v2.RandomApply([v2.GaussianBlur(kernel_size=(11, 11), )], p=0.3),
+        # ], p=0.3),  # High probability!
+        # v2.RandomAutocontrast(p=0.3),
+        # v2.RandomAdjustSharpness(sharpness_factor=1.5, p=0.3),
+
+        # Blur
+        v2.RandomApply([v2.GaussianBlur(kernel_size=(11, 11), )], p=0.3),
 
         # Normalization
         v2.ToDtype(torch.float32, scale=True),
@@ -484,8 +463,7 @@ if __name__ == '__main__':
 
     parser.add_argument("--model_name", type=str, default="facebook/dinov3-vits16-pretrain-lvd1689m")
     parser.add_argument("--freeze_backbone", action="store_true")
-    parser.add_argument("--hidden_dim", type=int, default=1024)
-    parser.add_argument("--log_transform", action="store_true")
+    parser.add_argument("--hidden_dim", type=int, default=128)
 
     parser.add_argument("--data_folder", type=str, default="data")
     parser.add_argument("--mode", type=str, default="single-fold")
@@ -517,7 +495,6 @@ if __name__ == '__main__':
         "model_name": args.model_name,
         "freeze_backbone": args.freeze_backbone,
         "hidden_dim": args.hidden_dim,
-        "log_transform": args.log_transform,
 
         # Other
         "data_folder": args.data_folder,
