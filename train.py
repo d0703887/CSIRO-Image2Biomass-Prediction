@@ -20,8 +20,7 @@ from utils import load_data, group_k_fold
 
 
 LOSS_KEYS = [
-    "Dry_Green_g", "Dry_Clover_g", "Dry_Dead_g", "GDM_g",
-    "Dry_Total_g"
+    "Dry_Green_g", "Dry_Clover_g", "Dry_Dead_g", "Avg_Height"
 ]
 
 class CSIRODataset(Dataset):
@@ -63,7 +62,7 @@ class CSIRODataset(Dataset):
         row = self.data_values[idx]
         return {
             "Input_Img": input_img,
-            #"Height_Ave_cm": torch.tensor(row["Height_Ave_cm"], dtype=torch.float32),
+            "Avg_Height": torch.tensor(row["Height_Ave_cm"], dtype=torch.float32),
             "Dry_Green_g": torch.tensor(row["Dry_Green_g"], dtype=torch.float32),
             "Dry_Clover_g": torch.tensor(row["Dry_Clover_g"], dtype=torch.float32),
             "Dry_Dead_g": torch.tensor(row["Dry_Dead_g"], dtype=torch.float32),
@@ -172,9 +171,10 @@ class Trainer:
         total_loss = 0
 
         for k in pred_dict.keys():
-            loss = self.regression_loss_fn(pred_dict[k], data_dict[k])
-            loss_dict[k] = loss
-            total_loss += loss * self.loss_coefficient[k]
+            if k in self.loss_coefficient.keys():
+                loss = self.regression_loss_fn(pred_dict[k], data_dict[k])
+                loss_dict[k] = loss
+                total_loss += loss * self.loss_coefficient[k]
         loss_dict["main_loss"] = total_loss
 
         if is_train:
@@ -408,14 +408,14 @@ def main(config, mode: str):
         v2.Resize((768, 768), antialias=True),
 
         # Color
-        # v2.RandomApply([
-        #     v2.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.4, hue=0.05)
-        # ], p=0.3),  # High probability!
-        # v2.RandomAutocontrast(p=0.3),
-        # v2.RandomAdjustSharpness(sharpness_factor=1.5, p=0.3),
+        v2.RandomApply([
+            v2.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.4, hue=0.05)
+        ], p=0.5),  # High probability!
+        #v2.RandomAutocontrast(p=0.3),
+        v2.RandomAdjustSharpness(sharpness_factor=1.5, p=0.5),
 
         # Blur
-        v2.RandomApply([v2.GaussianBlur(kernel_size=(11, 11), )], p=0.3),
+        #v2.RandomApply([v2.GaussianBlur(kernel_size=(11, 11), )], p=0.3),
 
         # Normalization
         v2.ToDtype(torch.float32, scale=True),

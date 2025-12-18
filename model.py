@@ -14,12 +14,21 @@ class MLP(nn.Module):
             mode: str = "biomass"
     ):
         super().__init__()
+        if mode == "biomass":
+            final_act = nn.Softplus()
+        elif mode == "gate":
+            final_act = nn.Sigmoid()
+        elif mode == "height":
+            final_act = nn.Identity()
+        else:
+            raise ValueError(f"Unsupported MLP mode: {mode}")
+
         self.mlp = nn.Sequential(
             nn.Linear(input_dim, hidden_dim),
             nn.SiLU(),
             nn.Dropout(dropout),
             nn.Linear(hidden_dim, output_dim),
-            nn.Softplus() if mode == "biomass" else nn.Sigmoid()
+            final_act
         )
 
         # Initialize the final linear layer to stabilize training
@@ -51,7 +60,7 @@ class DinoV3BackBone(nn.Module):
                 param.requires_grad = False
             self.backbone.eval()
 
-        # Regression/Classification head
+        # Biomass head
         make_head = lambda mode: MLP(self.backbone_embed_dim, hidden_dim, mode=mode)
         self.green_mlp = make_head("biomass")
         self.clover_mlp = make_head("biomass")
@@ -62,7 +71,8 @@ class DinoV3BackBone(nn.Module):
         self.clover_gate = make_head("gate")
         self.dead_gate = make_head("gate")
 
-
+        # Auxiliary height prediction
+        self.height_mlp = make_head("height")
 
     def train(self, mode=True):
         super().train(mode)
@@ -76,7 +86,7 @@ class DinoV3BackBone(nn.Module):
         agg = tile_data.sum(dim=(1, 2))
         return agg
 
-    def forward(self, x, return_patch_preds=False):
+    def forward(self, x, return_patch_preds=False, return_gates=False):
         """
 
         :param x: shape (B * 2, C, H, W)
@@ -85,12 +95,12 @@ class DinoV3BackBone(nn.Module):
         vit_feature = self.backbone(x) # (B * 2, embed_dim)
         patch_feature = vit_feature.last_hidden_state[:, 5:, :] # (B * 2, num_patch, embed_dim)
 
-        # (B * 2, num_patch, 1)
+        # Biomass prediction
         tile_green= self.green_mlp(patch_feature)
         tile_clover = self.clover_mlp(patch_feature)
         tile_dead = self.dead_mlp(patch_feature)
 
-        # Gating
+        # Gates
         tile_green_gate = self.green_gate(patch_feature)
         tile_clover_gate = self.clover_gate(patch_feature)
         tile_dead_gate = self.dead_gate(patch_feature)
@@ -101,6 +111,14 @@ class DinoV3BackBone(nn.Module):
         tile_total = tile_green + tile_clover + tile_dead
         tile_gdm = tile_green + tile_clover
 
+        # Height
+        b_times_2, num_patch, _ = patch_feature.shape
+        patch_height = self.height_mlp(patch_feature)
+        weighted_height_sum = patch_height * tile_green_gate.detach()  # (B * 2, num_patch)
+        weighted_height_sum = weighted_height_sum.view(-1, 2 * num_patch)  # (B, 2 * num_patch)
+        avg_height = torch.sum(weighted_height_sum, dim=1) / (torch.sum(tile_green_gate.view(-1, 2 * num_patch).detach(), dim=1) + 1e-6)
+
+
         # Aggregation
         green_g = self.aggregate_tile(tile_green)
         clover_g = self.aggregate_tile(tile_clover)
@@ -108,13 +126,22 @@ class DinoV3BackBone(nn.Module):
         total_g = self.aggregate_tile(tile_total)
         gdm_g = self.aggregate_tile(tile_gdm)
 
+
         pred_dict = {
             "Dry_Green_g": green_g,
             "Dry_Clover_g": clover_g,
             "Dry_Dead_g": dead_g,
             "Dry_Total_g": total_g,
             "GDM_g": gdm_g,
+            "Avg_Height": avg_height
         }
+
+        if return_gates:
+            pred_dict.update({
+                "Tile_Gate_Dry_Green_g": tile_green_gate,
+                "Tile_Gate_Dry_Clover_g": tile_clover_gate,
+                "Tile_Gate_Dry_Dead_g": tile_dead_gate
+            })
 
         if return_patch_preds:
             pred_dict.update({
