@@ -113,11 +113,14 @@ class DinoV3BackBone(nn.Module):
 
         # Height
         b_times_2, num_patch, _ = patch_feature.shape
+        height_weight = (tile_green_gate + tile_clover_gate + tile_dead_gate).clamp(max=1.0)
         patch_height = self.height_mlp(patch_feature)
-        weighted_height_sum = patch_height * tile_green_gate.detach()  # (B * 2, num_patch)
-        weighted_height_sum = weighted_height_sum.view(-1, 2 * num_patch)  # (B, 2 * num_patch)
-        avg_height = torch.sum(weighted_height_sum, dim=1) / (torch.sum(tile_green_gate.view(-1, 2 * num_patch).detach(), dim=1) + 1e-6)
 
+        height_weight = height_weight.view(-1, 2 * num_patch).detach()
+        patch_height = patch_height.view(-1, 2 * num_patch)
+        weighted_height_sum = torch.sum(height_weight * patch_height, dim=1)
+        weight_sum = torch.sum(height_weight, dim=1)
+        avg_height = weighted_height_sum / (weight_sum + 1e-6)
 
         # Aggregation
         green_g = self.aggregate_tile(tile_green)
