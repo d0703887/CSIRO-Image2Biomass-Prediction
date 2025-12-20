@@ -71,7 +71,7 @@ class Trainer:
         self.model = DinoV3BackBone(
             model_name=self.model_name,
             hidden_dim=self.hidden_dim,
-            freeze_backbone=True,
+            freeze_backbone=False,
             predict_height=self.predict_height,
         )
         self.model.to(self.device)
