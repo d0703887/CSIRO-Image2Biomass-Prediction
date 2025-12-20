@@ -33,7 +33,8 @@ def load_Grass(data_folder, df_name):
 
 def load_Irish(data_folder, sub_folder, df_name):
     df = pd.read_csv(os.path.join(data_folder, sub_folder, df_name))
-    df["Dry_Green_g"] = df["Grass Dried"] + df["Weeds Dried"]
+    df["Dry_Green_g"] = df["Grass Dried"] * df["Herbage Mass (kg DM/ha)"] + df["Weeds Dried"] * df["Herbage Mass (kg DM/ha)"]
+    df["Dry_Clover_g"] = df["Clover Dried"] * df["Herbage Mass (kg DM/ha)"]
     df.rename(columns={"Image Name": "image_path", "Clover Dried": "Dry_Clover_g"}, inplace=True)
     df = df[["image_path", "Dry_Green_g", "Dry_Clover_g"]]
     df["image_path"] = df["image_path"].map(
