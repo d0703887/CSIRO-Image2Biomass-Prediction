@@ -100,8 +100,6 @@ class DinoV3BackBone(nn.Module):
         weight_sum = torch.sum(weight, dim=(1, 2))
         return weighted_sum / (weight_sum + 1e-6)
 
-
-
     def forward(self, x, mode="tiled", return_patch_preds=False, return_gates=False):
         """
 

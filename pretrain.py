@@ -75,8 +75,6 @@ class Trainer:
             predict_height=self.predict_height,
         )
         self.model.to(self.device)
-        if os.name != "nt":
-            self.model = torch.compile(self.model)
         self.optimizer = torch.optim.AdamW(self.model.parameters(), lr=self.lr, weight_decay=self.weight_decay)
 
         self.train_global_mean = self._compute_global_mean(train_dataloader.dataset)
