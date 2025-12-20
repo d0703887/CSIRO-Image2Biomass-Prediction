@@ -12,4 +12,4 @@ python pretrain.py \
     --wandb_mode "online" \
     --irish_data_folder "/content/pretrain_data/IrishGrassClover" \
     --grass_data_folder "/content/pretrain_data/GrassClover" \
-    --csiro_data_folder "/content/data"
+    --csiro_data_folder "/content/csiro_data/data"

@@ -61,8 +61,8 @@ class CombinedExternalDataset(Dataset):
 
         self.df = df
 
-        self.img_paths = self.df["image_path"]
-        self.sources = self.df["source"]
+        self.img_paths = self.df["image_path"].tolist()
+        self.sources = self.df["source"].tolist()
         self.data_values = self.df[["Dry_Green_g", "Dry_Clover_g"]].to_dict('records')
 
     def __len__(self):

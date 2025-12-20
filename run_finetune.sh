@@ -2,10 +2,10 @@
 
 
 python finetune.py \
-    --epochs 20 \
-    --batch_size 8 \
-    --lr 1e-5 \
-    --weight_decay 1e-2 \
+    --epochs 25 \
+    --batch_size 16 \
+    --lr 1e-4 \
+    --weight_decay 1e-3 \
     --loss_coefficient 0.3 0.3 0.3 0.1 \
     --wandb_mode "online" \
     --model_name "facebook/dinov3-vitb16-pretrain-lvd1689m" \
