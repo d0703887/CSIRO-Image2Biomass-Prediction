@@ -1,75 +1,25 @@
 import torch
 import torch.nn as nn
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import DataLoader
 from torchvision.transforms import v2
-from torchvision.io import read_image
 from tqdm import tqdm
 import wandb
-from sklearn.model_selection import train_test_split
 from rich.console import Console
 from rich.table import Table
 
 import pandas as pd
 import os
 from datetime import datetime
-import numpy as np
 import argparse
 
 from model import DinoV3BackBone
-from utils import load_data, group_k_fold
+from utils.utils import load_CSIRO, CSIRO_group_k_fold
+from dataset import CSIRODataset
 
 
 LOSS_KEYS = [
     "Dry_Green_g", "Dry_Clover_g", "Dry_Dead_g", "Avg_Height"
 ]
-
-class CSIRODataset(Dataset):
-    def __init__(
-            self,
-            data_folder: str,
-            df: pd.DataFrame,
-            transform = None,
-    ):
-        self.data_folder = data_folder
-        self.df = df
-        self.transform = transform
-
-        self.img_paths = df["image_path"].tolist()
-        self.species = df["Species"].tolist()
-        self.data_values = df[[
-            "Pre_GSHH_NDVI", "Height_Ave_cm", "Dry_Green_g",
-            "Dry_Clover_g", "Dry_Dead_g", "Dry_Total_g", "GDM_g"
-        ]].to_dict('records')
-
-    def __len__(self):
-        return len(self.df)
-
-    def split_img(self, image):
-        _, _, w = image.shape
-        center = w // 2
-        left_img = image[:, :, :center]
-        right_img = image[:, :, center:]
-        return left_img, right_img
-
-    def __getitem__(self, idx):
-        img_path = os.path.join(self.data_folder, self.img_paths[idx])
-        img = read_image(img_path)
-        left_img, right_img = self.split_img(img)
-        if self.transform:
-            left_img = self.transform(left_img)
-            right_img = self.transform(right_img)
-        input_img = torch.cat([left_img, right_img]) # (2, C, H, W)
-        row = self.data_values[idx]
-        return {
-            "Input_Img": input_img,
-            "Avg_Height": torch.tensor(row["Height_Ave_cm"], dtype=torch.float32),
-            "Dry_Green_g": torch.tensor(row["Dry_Green_g"], dtype=torch.float32),
-            "Dry_Clover_g": torch.tensor(row["Dry_Clover_g"], dtype=torch.float32),
-            "Dry_Dead_g": torch.tensor(row["Dry_Dead_g"], dtype=torch.float32),
-            "Dry_Total_g": torch.tensor(row["Dry_Total_g"], dtype=torch.float32),
-            "GDM_g": torch.tensor(row["GDM_g"], dtype=torch.float32),
-            #"Has_Clover": torch.tensor(1.0 if "clover" in self.species[idx].lower() else 0.0, dtype=torch.float32)
-        }
 
 class Trainer:
     def __init__(
@@ -107,6 +57,7 @@ class Trainer:
         self.model_name = config["model_name"]
         self.freeze_backbone = config["freeze_backbone"]
         self.hidden_dim = config["hidden_dim"]
+        self.predict_height = config["predict_height"]
 
         # Other
         self.data_folder = config["data_folder"]
@@ -141,6 +92,7 @@ class Trainer:
             model_name=self.model_name,
             hidden_dim=self.hidden_dim,
             freeze_backbone=self.freeze_backbone,
+            predict_height=self.predict_height
         )
         return model
 
@@ -331,14 +283,7 @@ class Trainer:
             train_metrics, train_pred_tables = self.train_one_epoch(model, optimizer, train_dataloader, epoch, train_global_mean)
             val_metrics, val_pred_tables = self.validation(model, optimizer, val_dataloader, epoch, val_global_mean)
 
-            log = {}
-            log.update(self._prefix_metrics(train_metrics, "train"))
-            log.update(self._prefix_metrics(val_metrics, "val"))
-            log.update(self._prefix_metrics(train_pred_tables, "Train_Pred"))
-            log.update(self._prefix_metrics(val_pred_tables, "val_Pred"))
-            wandb_run.log(log, step=epoch)
-
-            # Logging
+            # Rich logging
             table = Table(title=f"Epoch {epoch:02d}/{self.epochs:02d} Summary", show_header=True,
                           header_style="bold magenta")
 
@@ -369,12 +314,22 @@ class Trainer:
 
             console.print(table)
 
+            log = {}
+            log.update(self._prefix_metrics(train_metrics, "train"))
+            log.update(self._prefix_metrics(val_metrics, "val"))
+
             # Save model
             cur_r2 = val_metrics["r2"]
             if cur_r2 > best_val_r2:
+                log.update(self._prefix_metrics(train_pred_tables, "Train_Pred"))
+                log.update(self._prefix_metrics(val_pred_tables, "val_Pred"))
+
                 best_val_r2 = cur_r2
                 torch.save(model.state_dict(), os.path.join(wandb_run.dir, f"{fold_idx}_best_model_{best_val_r2:.3f}.pth"))
                 print(f"New best model saved! (R2: {best_val_r2:.4f})")
+
+            # Wandb logging
+            wandb_run.log(log, step=epoch)
 
         wandb_run.finish()
         return best_val_r2
@@ -391,7 +346,7 @@ class Trainer:
 
 
 def main(config, mode: str):
-    df = load_data(config["data_folder"])
+    df = load_CSIRO(config["data_folder"])
     train_transforms = v2.Compose([
         v2.ToImage(),
 
@@ -434,7 +389,7 @@ def main(config, mode: str):
         )
     ])
 
-    train_idxs, val_idxs = group_k_fold(df)
+    train_idxs, val_idxs = CSIRO_group_k_fold(df)
 
     trainer = Trainer(
         df,
@@ -459,12 +414,13 @@ if __name__ == '__main__':
     parser.add_argument("--weight_decay", type=float, default=1e-4)
     parser.add_argument("--loss_coefficient", type=float, nargs="+")
     parser.add_argument("--stage2_start_epoch", type=int, default=10)
-    parser.add_argument("--wandb_mode", type=str, default="online")
 
     parser.add_argument("--model_name", type=str, default="facebook/dinov3-vits16-pretrain-lvd1689m")
     parser.add_argument("--freeze_backbone", action="store_true")
     parser.add_argument("--hidden_dim", type=int, default=128)
+    parser.add_argument("--predict_height", action="store_true")
 
+    parser.add_argument("--wandb_mode", type=str, default="online")
     parser.add_argument("--data_folder", type=str, default="data")
     parser.add_argument("--mode", type=str, default="single-fold")
     args = parser.parse_args()
@@ -495,6 +451,7 @@ if __name__ == '__main__':
         "model_name": args.model_name,
         "freeze_backbone": args.freeze_backbone,
         "hidden_dim": args.hidden_dim,
+        "predict_height": args.predict_height,
 
         # Other
         "data_folder": args.data_folder,

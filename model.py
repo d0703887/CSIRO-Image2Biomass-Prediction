@@ -1,8 +1,6 @@
 import torch.nn as nn
 import torch
 from transformers import AutoModel
-# from transformers.models.dinov3_vit import DINOv3ViTModel, DINOv3ViTConfig
-# import os, json
 
 class MLP(nn.Module):
     def __init__(
@@ -21,7 +19,7 @@ class MLP(nn.Module):
         elif mode == "height":
             final_act = nn.Identity()
         else:
-            raise ValueError(f"Unsupported MLP mode: {mode}")
+            raise ValueError(f"Unsupported mode: {mode}")
 
         self.mlp = nn.Sequential(
             nn.Linear(input_dim, hidden_dim),
@@ -39,15 +37,18 @@ class MLP(nn.Module):
     def forward(self, x):
         return self.mlp(x)
 
+
 class DinoV3BackBone(nn.Module):
     def __init__(
             self,
             model_name: str,
             hidden_dim: int,
             freeze_backbone: bool = True,
+            predict_height: bool = False,
     ):
         super().__init__()
         self.freeze_backbone = freeze_backbone
+        self.predict_height = predict_height
 
         # DinoV3
         self.backbone = AutoModel.from_pretrained(
@@ -60,8 +61,9 @@ class DinoV3BackBone(nn.Module):
                 param.requires_grad = False
             self.backbone.eval()
 
-        # Biomass head
         make_head = lambda mode: MLP(self.backbone_embed_dim, hidden_dim, mode=mode)
+
+        # Biomass head
         self.green_mlp = make_head("biomass")
         self.clover_mlp = make_head("biomass")
         self.dead_mlp = make_head("biomass")
@@ -72,7 +74,8 @@ class DinoV3BackBone(nn.Module):
         self.dead_gate = make_head("gate")
 
         # Auxiliary height prediction
-        self.height_mlp = make_head("height")
+        if self.predict_height:
+            self.height_mlp = make_head("height")
 
     def train(self, mode=True):
         super().train(mode)
@@ -80,78 +83,83 @@ class DinoV3BackBone(nn.Module):
             self.backbone.eval()
         return self
 
-    def aggregate_tile(self, tile_data):
-        _, num_patch, _ = tile_data.shape
-        tile_data = tile_data.view(-1, 2, num_patch)
-        agg = tile_data.sum(dim=(1, 2))
+    def aggregate_biomass(self, biomass, mode="tiled"):
+        if mode == "tiled":
+            _, num_patch, _ = biomass.shape
+            biomass = biomass.view(-1, 2, num_patch)
+        agg = biomass.sum(dim=(1, 2))
         return agg
 
-    def forward(self, x, return_patch_preds=False, return_gates=False):
+    def aggregate_height(self, patch_height, weight, mode="tiled"):
+        if mode == "tiled":
+            _, num_patch, _ = patch_height.shape
+            patch_height = patch_height.view(-1, 2, num_patch)
+            weight = weight.view(-1, 2, num_patch)
+
+        weighted_sum = torch.sum(patch_height * weight, dim=(1, 2))
+        weight_sum = torch.sum(weight, dim=(1, 2))
+        return weighted_sum / (weight_sum + 1e-6)
+
+
+
+    def forward(self, x, mode="tiled", return_patch_preds=False, return_gates=False):
         """
 
-        :param x: shape (B * 2, C, H, W)
+        :param x: shape (B, C, H, W)
         :return: preds
         """
         vit_feature = self.backbone(x) # (B * 2, embed_dim)
         patch_feature = vit_feature.last_hidden_state[:, 5:, :] # (B * 2, num_patch, embed_dim)
 
         # Biomass prediction
-        tile_green= self.green_mlp(patch_feature)
-        tile_clover = self.clover_mlp(patch_feature)
-        tile_dead = self.dead_mlp(patch_feature)
+        raw_green= self.green_mlp(patch_feature)
+        raw_clover = self.clover_mlp(patch_feature)
+        raw_dead = self.dead_mlp(patch_feature)
 
         # Gates
-        tile_green_gate = self.green_gate(patch_feature)
-        tile_clover_gate = self.clover_gate(patch_feature)
-        tile_dead_gate = self.dead_gate(patch_feature)
-        tile_green = tile_green * tile_green_gate
-        tile_clover = tile_clover * tile_clover_gate
-        tile_dead = tile_dead * tile_dead_gate
+        green_gate = self.green_gate(patch_feature)
+        clover_gate = self.clover_gate(patch_feature)
+        dead_gate = self.dead_gate(patch_feature)
 
-        tile_total = tile_green + tile_clover + tile_dead
-        tile_gdm = tile_green + tile_clover
-
-        # Height
-        b_times_2, num_patch, _ = patch_feature.shape
-        height_weight = (tile_green_gate + tile_clover_gate + tile_dead_gate).clamp(max=1.0)
-        patch_height = self.height_mlp(patch_feature)
-
-        height_weight = height_weight.view(-1, 2 * num_patch).detach()
-        patch_height = patch_height.view(-1, 2 * num_patch)
-        weighted_height_sum = torch.sum(height_weight * patch_height, dim=1)
-        weight_sum = torch.sum(height_weight, dim=1)
-        avg_height = weighted_height_sum / (weight_sum + 1e-6)
+        # Apply gates
+        patch_green = raw_green * green_gate
+        patch_clover = raw_clover * clover_gate
+        patch_dead = raw_dead * dead_gate
 
         # Aggregation
-        green_g = self.aggregate_tile(tile_green)
-        clover_g = self.aggregate_tile(tile_clover)
-        dead_g = self.aggregate_tile(tile_dead)
-        total_g = self.aggregate_tile(tile_total)
-        gdm_g = self.aggregate_tile(tile_gdm)
-
+        pred_green = self.aggregate_biomass(patch_green, mode)
+        pred_clover = self.aggregate_biomass(patch_clover, mode)
+        pred_dead = self.aggregate_biomass(patch_dead, mode)
 
         pred_dict = {
-            "Dry_Green_g": green_g,
-            "Dry_Clover_g": clover_g,
-            "Dry_Dead_g": dead_g,
-            "Dry_Total_g": total_g,
-            "GDM_g": gdm_g,
-            "Avg_Height": avg_height
+            "Dry_Green_g": pred_green,
+            "Dry_Clover_g": pred_clover,
+            "Dry_Dead_g": pred_dead,
+            "Dry_Total_g": pred_green + pred_clover + pred_dead,
+            "GDM_g": pred_green + pred_clover
         }
 
+        if self.predict_height:
+            weight = (green_gate + clover_gate + dead_gate).clamp(max=1.0)
+            patch_height = self.height_mlp(patch_feature)
+            pred_dict["Avg_Height"] = self.aggregate_height(patch_height, weight, mode)
+
+
+        # TODO: do not return tiled value
         if return_gates:
             pred_dict.update({
-                "Tile_Gate_Dry_Green_g": tile_green_gate,
-                "Tile_Gate_Dry_Clover_g": tile_clover_gate,
-                "Tile_Gate_Dry_Dead_g": tile_dead_gate
+                "Tile_Gate_Dry_Green_g": green_gate,
+                "Tile_Gate_Dry_Clover_g": clover_gate,
+                "Tile_Gate_Dry_Dead_g": dead_gate
             })
 
         if return_patch_preds:
             pred_dict.update({
-                "Tile_Dry_Green_g": tile_green,
-                "Tile_Dry_Clover_g": tile_clover,
-                "Tile_Dry_Dead_g": tile_dead
+                "Tile_Dry_Green_g": pred_green,
+                "Tile_Dry_Clover_g": pred_clover,
+                "Tile_Dry_Dead_g": pred_dead
             })
 
         return pred_dict
+
 
