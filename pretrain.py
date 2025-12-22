@@ -12,7 +12,7 @@ import os
 from datetime import datetime
 import argparse
 
-from model import DinoV3BackBone
+from model.DinoV3Backbone import DinoV3Backbone
 from utils.utils import merge_Irish_Grass, load_CSIRO
 from dataset import CombinedExternalDataset, CSIRODataset
 
@@ -68,7 +68,7 @@ class Trainer:
             dir=self.project_dir
         )
 
-        self.model = DinoV3BackBone(
+        self.model = DinoV3Backbone(
             model_name=self.model_name,
             hidden_dim=self.hidden_dim,
             freeze_backbone=False,

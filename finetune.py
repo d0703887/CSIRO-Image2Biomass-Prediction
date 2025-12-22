@@ -12,7 +12,7 @@ import os
 from datetime import datetime
 import argparse
 
-from model import DinoV3BackBone
+from model.DinoV3Backbone import DinoV3Backbone
 from utils.utils import load_CSIRO, CSIRO_group_k_fold
 from dataset import CSIRODataset
 
@@ -46,8 +46,8 @@ class Trainer:
         self.epochs = config["epochs"]
         self.device = config["device"]
         self.batch_size = config["batch_size"]
-        self.input_H = 768
-        self.input_W = 768
+        self.input_H = config["resolution"]
+        self.input_W = config["resolution"]
         self.loss_coefficient = config["loss_coefficient"]
         self.lr = config["lr"]
         self.weight_decay = config["weight_decay"]
@@ -88,7 +88,7 @@ class Trainer:
         return wandb_run
 
     def _initialize_model(self):
-        model = DinoV3BackBone(
+        model = DinoV3Backbone(
             model_name=self.model_name,
             hidden_dim=self.hidden_dim,
             freeze_backbone=self.freeze_backbone,
@@ -117,7 +117,7 @@ class Trainer:
             optimizer.zero_grad()
 
         input_imgs = data_dict["Input_Img"].view(data_dict["Input_Img"].shape[0] * 2, 3, self.input_H, self.input_W)
-        pred_dict = model(input_imgs)
+        pred_dict = model(input_imgs, mode="tiled")
 
         loss_dict = {}
         total_loss = 0
@@ -360,7 +360,7 @@ def main(config, mode: str):
             v2.RandomRotation(degrees=(270, 270), expand=False)
         ]),
 
-        v2.Resize((768, 768), antialias=True),
+        v2.Resize((config["resolution"], config["resolution"]), antialias=True),
 
         # Color
         v2.RandomApply([
@@ -381,7 +381,7 @@ def main(config, mode: str):
     ])
     val_transforms = v2.Compose([
         v2.ToImage(),
-        v2.Resize((768, 768), antialias=True),
+        v2.Resize((config["resolution"], config["resolution"]), antialias=True),
         v2.ToDtype(torch.float32, scale=True),
         v2.Normalize(
             mean=(0.485, 0.456, 0.406),
@@ -420,6 +420,7 @@ if __name__ == '__main__':
     parser.add_argument("--hidden_dim", type=int, default=128)
     parser.add_argument("--predict_height", action="store_true")
 
+    parser.add_argument("--resolution", type=int, default=768)
     parser.add_argument("--wandb_mode", type=str, default="online")
     parser.add_argument("--data_folder", type=str, default="data")
     parser.add_argument("--mode", type=str, default="single-fold")
@@ -454,6 +455,7 @@ if __name__ == '__main__':
         "predict_height": args.predict_height,
 
         # Other
+        "resolution": args.resolution,
         "data_folder": args.data_folder,
         "wandb_mode": args.wandb_mode
     }

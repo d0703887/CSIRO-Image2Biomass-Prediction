@@ -59,8 +59,10 @@ def merge_Irish_Grass(grass_folder, irish_folder):
     irish_phone_train_df = load_Irish(irish_folder, "phone", "train.csv")
     irish_phone_val_df = load_Irish(irish_folder, "phone", "val.csv")
 
-    train_df = pd.concat([grass_train_df, irish_camera_train_df, irish_phone_train_df])
-    val_df = pd.concat([grass_val_df, irish_camera_val_df, irish_phone_val_df])
+    # train_df = pd.concat([grass_train_df, irish_camera_train_df, irish_phone_train_df])
+    # val_df = pd.concat([grass_val_df, irish_camera_val_df, irish_phone_val_df])
+    train_df = pd.concat([grass_train_df,])
+    val_df = pd.concat([grass_val_df,])
 
     # Logging
     print(f"[Grass] Train: {len(grass_train_df):,} | Val: {len(grass_val_df):,}")
