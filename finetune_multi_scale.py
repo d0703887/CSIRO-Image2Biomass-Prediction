@@ -263,27 +263,41 @@ class Trainer:
         train_dataloader, val_dataloader = self._initialize_data(fold_idx)
         val_global_mean = self._compute_global_mean(val_dataloader.dataset)
         train_global_mean = self._compute_global_mean(train_dataloader.dataset)
+
         model = self._initialize_model()
         model.to(self.device)
         optimizer = torch.optim.AdamW(model.parameters(), lr=self.lr, weight_decay=self.weight_decay)
+        scheduler = None
+
         best_val_r2 = -float("inf")
         console = Console()
 
         for epoch in range(1, self.epochs + 1):
             # Two-Stage Training
-            # Stage 1: freeze backbone
-            # Stage 2: unfreeze backbone and lower lr
             if not self.freeze_backbone and epoch == 1:
+                print('Stage 1: Freezing Backbone')
                 for param in model.backbone.parameters():
                     param.requires_grad = False
+
             if not self.freeze_backbone and epoch == self.stage2_start_epoch + 1:
+                print("Stage 2: Full Fine-Tune")
                 for param in model.backbone.parameters():
                     param.requires_grad = True
                 for g in optimizer.param_groups:
                     g['lr'] = g['lr'] * 0.1
 
+                remaining_epochs = self.epochs - epoch + 1
+                scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+                    optimizer,
+                    T_max=remaining_epochs,
+                    eta_min=1e-6
+                )
+
             train_metrics, train_pred_tables = self.train_one_epoch(model, optimizer, train_dataloader, epoch, train_global_mean)
             val_metrics, val_pred_tables = self.validation(model, optimizer, val_dataloader, epoch, val_global_mean)
+            current_lr = optimizer.param_groups[0]["lr"]
+            if scheduler is not None:
+                scheduler.step()
 
             # Rich logging
             table = Table(title=f"Epoch {epoch:02d}/{self.epochs:02d} Summary", show_header=True,
@@ -316,7 +330,7 @@ class Trainer:
 
             console.print(table)
 
-            log = {}
+            log = {"lr": current_lr}
             log.update(self._prefix_metrics(train_metrics, "train"))
             log.update(self._prefix_metrics(val_metrics, "val"))
 
@@ -354,7 +368,6 @@ def main(config, mode: str):
         v2.RandomApply([
             v2.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.4, hue=0.05)
         ], p=0.5),  # High probability!
-        #v2.RandomAutocontrast(p=0.3),
         v2.RandomAdjustSharpness(sharpness_factor=1.5, p=0.5),
 
         # Blur
