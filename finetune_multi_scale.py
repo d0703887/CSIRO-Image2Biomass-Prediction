@@ -271,8 +271,10 @@ class Trainer:
             scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
                     optimizer,
                     T_max=self.epochs,
-                    eta_min=1e-6
+                    eta_min=1e-5
                 )
+        else:
+            scheduler = None
 
         best_val_r2 = -float("inf")
         console = Console()
