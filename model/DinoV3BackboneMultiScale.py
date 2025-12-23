@@ -51,14 +51,14 @@ class DinoV3BackboneMultiScale(nn.Module):
         make_head = lambda mode: MLP(self.embed_dim * 2, hidden_dim, mode=mode)
 
         # Biomass head
-        self.green_mlp = make_head("biomass")
-        self.clover_mlp = make_head("biomass")
-        self.dead_mlp = make_head("biomass")
+        self.green_mlp = MLP(self.embed_dim * 2, hidden_dim, mode="biomass")
+        self.clover_mlp = MLP(self.embed_dim * 2, hidden_dim, mode="biomass")
+        self.dead_mlp = MLP(self.embed_dim * 2, hidden_dim, mode="biomass")
 
         # Gate MLP to prevent noise-cumulation
-        self.green_gate = make_head("gate")
-        self.clover_gate = make_head("gate")
-        self.dead_gate = make_head("gate")
+        self.green_gate = MLP(self.embed_dim * 2, hidden_dim // 2, mode="gate")
+        self.clover_gate = MLP(self.embed_dim * 2, hidden_dim // 2, mode="gate")
+        self.dead_gate = MLP(self.embed_dim * 2, hidden_dim // 2, mode="gate")
 
         # Auxiliary height prediction
         if self.predict_height:
