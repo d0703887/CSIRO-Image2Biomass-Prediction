@@ -364,11 +364,11 @@ class Trainer:
 def main(config, mode: str):
     df = load_CSIRO(config["data_folder"])
     train_transforms = v2.Compose([
-        # Color
-        v2.RandomApply([
-            v2.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.4, hue=0.05)
-        ], p=0.5),  # High probability!
-        v2.RandomAdjustSharpness(sharpness_factor=1.5, p=0.5),
+        # # Color
+        # v2.RandomApply([
+        #     v2.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.4, hue=0.05)
+        # ], p=0.5),  # High probability!
+        # v2.RandomAdjustSharpness(sharpness_factor=1.5, p=0.5),
 
         # Blur
         #v2.RandomApply([v2.GaussianBlur(kernel_size=(11, 11), )], p=0.3),

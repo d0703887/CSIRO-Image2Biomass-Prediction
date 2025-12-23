@@ -30,10 +30,10 @@ class DinoV3BackboneMultiScale(nn.Module):
 
         if self.training_mode == "lora":
             peft_config = LoraConfig(
-                r=16,
-                lora_alpha=16,
+                r=8,
+                lora_alpha=8,
                 target_modules=["q_proj", "v_proj"],
-                lora_dropout=0.1,
+                lora_dropout=0.3,
                 bias="none"
             )
             self.backbone = get_peft_model(self.backbone, peft_config)
