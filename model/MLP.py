@@ -6,7 +6,7 @@ class MLP(nn.Module):
             input_dim: int,
             hidden_dim: int,
             output_dim: int = 1,
-            dropout: float = 0.2,
+            dropout: float = 0.4,
             mode: str = "biomass"
     ):
         super().__init__()

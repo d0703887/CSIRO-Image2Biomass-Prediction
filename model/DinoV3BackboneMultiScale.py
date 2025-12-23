@@ -4,21 +4,22 @@ import torch.nn.functional as F
 from transformers import AutoModel
 from model.MLP import MLP
 import math
+from peft import LoraConfig, get_peft_model
 
 class DinoV3BackboneMultiScale(nn.Module):
     def __init__(
             self,
             model_name: str,
             hidden_dim: int,
-            freeze_backbone: bool = True,
             predict_height: bool = False,
+            training_mode: str = "freeze_backbone"
     ):
         # low resolution: num_patch
         # high resolution: 4 * num_patch
 
         super().__init__()
-        self.freeze_backbone = freeze_backbone
         self.predict_height = predict_height
+        self.training_mode = training_mode
 
         # DinoV3
         self.backbone = AutoModel.from_pretrained(
@@ -26,10 +27,25 @@ class DinoV3BackboneMultiScale(nn.Module):
             device_map="auto"
         )
         self.embed_dim = self.backbone.config.hidden_size
-        if self.freeze_backbone:
+
+        if self.training_mode == "lora":
+            peft_config = LoraConfig(
+                r=16,
+                lora_alpha=16,
+                target_modules=["q_proj", "v_proj"],
+                lora_dropout=0.1,
+                bias="none"
+            )
+            self.backbone = get_peft_model(self.backbone, peft_config)
+            self.backbone.print_trainable_parameters()
+
+        elif self.training_mode == "freeze_backbone":
             for param in self.backbone.parameters():
                 param.requires_grad = False
             self.backbone.eval()
+
+        elif self.training_mode != "full_finetune":
+            raise ValueError(f"Unsupported Training Mode: {self.training_mode}")
 
         # fine-grained + coarse-grained feature
         make_head = lambda mode: MLP(self.embed_dim * 2, hidden_dim, mode=mode)
@@ -50,7 +66,7 @@ class DinoV3BackboneMultiScale(nn.Module):
 
     def train(self, mode=True):
         super().train(mode)
-        if self.freeze_backbone:
+        if self.training_mode == "freeze_backbone":
             self.backbone.eval()
         return self
 

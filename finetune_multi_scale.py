@@ -55,7 +55,7 @@ class Trainer:
 
         # Model config
         self.model_name = config["model_name"]
-        self.freeze_backbone = config["freeze_backbone"]
+        self.training_mode = config["training_mode"]
         self.hidden_dim = config["hidden_dim"]
         self.predict_height = config["predict_height"]
 
@@ -91,7 +91,7 @@ class Trainer:
         model = DinoV3BackboneMultiScale(
             model_name=self.model_name,
             hidden_dim=self.hidden_dim,
-            freeze_backbone=self.freeze_backbone,
+            training_mode=self.training_mode,
             predict_height=self.predict_height
         )
         return model
@@ -273,13 +273,13 @@ class Trainer:
         console = Console()
 
         for epoch in range(1, self.epochs + 1):
-            # Two-Stage Training
-            if not self.freeze_backbone and epoch == 1:
+            # Two-Stage Full Model Training
+            if self.training_mode == "full_finetune" and epoch == 1:
                 print('Stage 1: Freezing Backbone')
                 for param in model.backbone.parameters():
                     param.requires_grad = False
 
-            if not self.freeze_backbone and epoch == self.stage2_start_epoch + 1:
+            if self.training_mode == "full_finetune" and epoch == self.stage2_start_epoch + 1:
                 print("Stage 2: Full Fine-Tune")
                 for param in model.backbone.parameters():
                     param.requires_grad = True
@@ -415,7 +415,7 @@ if __name__ == '__main__':
     parser.add_argument("--stage2_start_epoch", type=int, default=10)
 
     parser.add_argument("--model_name", type=str, default="facebook/dinov3-vits16-pretrain-lvd1689m")
-    parser.add_argument("--freeze_backbone", action="store_true")
+    parser.add_argument("--training_mode", type=str, default="freeze_backbone", choices=["full_finetune", "lora", "freeze_backbone"])
     parser.add_argument("--hidden_dim", type=int, default=128)
     parser.add_argument("--predict_height", action="store_true")
 
@@ -449,7 +449,7 @@ if __name__ == '__main__':
 
         # Model config
         "model_name": args.model_name,
-        "freeze_backbone": args.freeze_backbone,
+        "training_mode": args.training_mode,
         "hidden_dim": args.hidden_dim,
         "predict_height": args.predict_height,
 
