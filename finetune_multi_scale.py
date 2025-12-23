@@ -267,7 +267,12 @@ class Trainer:
         model = self._initialize_model()
         model.to(self.device)
         optimizer = torch.optim.AdamW(model.parameters(), lr=self.lr, weight_decay=self.weight_decay)
-        scheduler = None
+        if self.training_mode != "full_finetune":
+            scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+                    optimizer,
+                    T_max=self.epochs,
+                    eta_min=1e-6
+                )
 
         best_val_r2 = -float("inf")
         console = Console()
