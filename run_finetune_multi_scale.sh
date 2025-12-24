@@ -3,15 +3,15 @@
 
 python finetune_multi_scale.py \
     --epochs 25 \
-    --batch_size 4 \
+    --batch_size 2 \
     --lr 1e-4 \
-    --weight_decay 1e-2 \
+    --weight_decay 5e-2 \
     --loss_coefficient 0.34 0.33 0.33 0.0 \
     --model_name "facebook/dinov3-vitb16-pretrain-lvd1689m" \
     --hidden_dim 128 \
-    --training_mode "lora" \
+    --training_mode "full_finetune" \
     --resolution 1024 \
     --wandb_mode "online" \
-    --data_folder "data/CSIRO" \
+    --data_folder "/content/csiro_data/data" \
     --mode "single-fold" \
-    #--stage2_start_epoch 10
+    --stage2_start_epoch 5

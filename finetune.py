@@ -14,11 +14,11 @@ import argparse
 
 from model.DinoV3Backbone import DinoV3Backbone
 from utils.utils import load_CSIRO, CSIRO_group_k_fold
-from dataset import CSIRODataset
+from dataset import CSIROMultiScaleDataset
 
 
 LOSS_KEYS = [
-    "Dry_Green_g", "Dry_Clover_g", "Dry_Dead_g", "Avg_Height"
+    "Dry_Green_g", "Dry_Clover_g", "Dry_Dead_g"
 ]
 
 class Trainer:
@@ -55,9 +55,8 @@ class Trainer:
 
         # Model config
         self.model_name = config["model_name"]
-        self.freeze_backbone = config["freeze_backbone"]
+        self.training_mode = config["training_mode"]
         self.hidden_dim = config["hidden_dim"]
-        self.predict_height = config["predict_height"]
 
         # Other
         self.data_folder = config["data_folder"]
@@ -91,8 +90,7 @@ class Trainer:
         model = DinoV3Backbone(
             model_name=self.model_name,
             hidden_dim=self.hidden_dim,
-            freeze_backbone=self.freeze_backbone,
-            predict_height=self.predict_height
+            training_mode=self.training_mode,
         )
         return model
 
@@ -116,8 +114,10 @@ class Trainer:
         if is_train:
             optimizer.zero_grad()
 
-        input_imgs = data_dict["Input_Img"].view(data_dict["Input_Img"].shape[0] * 2, 3, self.input_H, self.input_W)
-        pred_dict = model(input_imgs, mode="tiled")
+        b_tmp = data_dict["HR_Input_Img"].shape[0]
+        hr_input_imgs = data_dict["HR_Input_Img"].view(b_tmp * 2, 3, self.input_H, self.input_W)
+        lr_input_imgs = data_dict["LR_Input_Img"].view(b_tmp * 2, 3, self.input_H // 2, self.input_W // 2)
+        pred_dict = model(hr_input_imgs, lr_input_imgs, mode="tiled")
 
         loss_dict = {}
         total_loss = 0
@@ -235,7 +235,7 @@ class Trainer:
         train_df = self.df.iloc[self.train_idxs[fold_idx]]
         val_df = self.df.iloc[self.val_idxs[fold_idx]]
         train_dataloader = DataLoader(
-            CSIRODataset(self.data_folder, train_df, self.train_transforms),
+            CSIROMultiScaleDataset(self.data_folder, train_df, self.input_H, self.input_W, self.train_transforms, is_train=True),
             batch_size=self.batch_size,
             shuffle=True,
             num_workers=4,
@@ -243,7 +243,7 @@ class Trainer:
             persistent_workers=True
         )
         val_dataloader = DataLoader(
-            CSIRODataset(self.data_folder, val_df, self.val_transforms),
+            CSIROMultiScaleDataset(self.data_folder, val_df, self.input_H, self.input_W, self.val_transforms, is_train=False),
             batch_size=self.batch_size,
             shuffle=False,
             num_workers=4,
@@ -261,27 +261,48 @@ class Trainer:
         train_dataloader, val_dataloader = self._initialize_data(fold_idx)
         val_global_mean = self._compute_global_mean(val_dataloader.dataset)
         train_global_mean = self._compute_global_mean(train_dataloader.dataset)
+
         model = self._initialize_model()
         model.to(self.device)
         optimizer = torch.optim.AdamW(model.parameters(), lr=self.lr, weight_decay=self.weight_decay)
+        if self.training_mode != "full_finetune":
+            scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+                    optimizer,
+                    T_max=self.epochs,
+                    eta_min=1e-5
+                )
+        else:
+            scheduler = None
+
         best_val_r2 = -float("inf")
         console = Console()
 
         for epoch in range(1, self.epochs + 1):
             # Two-Stage Training
-            # Stage 1: freeze backbone
-            # Stage 2: unfreeze backbone and lower lr
-            if not self.freeze_backbone and epoch == 1:
+            if self.training_mode == "full_finetune" and epoch == 1:
+                print('Stage 1: Freezing Backbone')
                 for param in model.backbone.parameters():
                     param.requires_grad = False
-            if not self.freeze_backbone and epoch == self.stage2_start_epoch + 1:
+
+            if self.training_mode == "full_finetune" and epoch == self.stage2_start_epoch + 1:
+                print("Stage 2: Full Fine-Tune")
                 for param in model.backbone.parameters():
                     param.requires_grad = True
                 for g in optimizer.param_groups:
                     g['lr'] = g['lr'] * 0.1
 
+                remaining_epochs = self.epochs - epoch + 1
+                scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+                    optimizer,
+                    T_max=remaining_epochs,
+                    eta_min=1e-6
+                )
+
             train_metrics, train_pred_tables = self.train_one_epoch(model, optimizer, train_dataloader, epoch, train_global_mean)
             val_metrics, val_pred_tables = self.validation(model, optimizer, val_dataloader, epoch, val_global_mean)
+            current_lr = optimizer.param_groups[0]["lr"]
+            if scheduler is not None:
+                scheduler.step()
 
             # Rich logging
             table = Table(title=f"Epoch {epoch:02d}/{self.epochs:02d} Summary", show_header=True,
@@ -314,7 +335,7 @@ class Trainer:
 
             console.print(table)
 
-            log = {}
+            log = {"lr": current_lr}
             log.update(self._prefix_metrics(train_metrics, "train"))
             log.update(self._prefix_metrics(val_metrics, "val"))
 
@@ -348,26 +369,26 @@ class Trainer:
 def main(config, mode: str):
     df = load_CSIRO(config["data_folder"])
     train_transforms = v2.Compose([
-        v2.ToImage(),
-
-        # Geometric
-        v2.RandomHorizontalFlip(p=0.5),
-        v2.RandomVerticalFlip(p=0.5),
-        v2.RandomChoice([
-            v2.Identity(),
-            v2.RandomRotation(degrees=(90, 90), expand=False),
-            v2.RandomRotation(degrees=(180, 180), expand=False),
-            v2.RandomRotation(degrees=(270, 270), expand=False)
-        ]),
-
-        v2.Resize((config["resolution"], config["resolution"]), antialias=True),
-
-        # Color
-        v2.RandomApply([
-            v2.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.4, hue=0.05)
-        ], p=0.5),  # High probability!
-        #v2.RandomAutocontrast(p=0.3),
-        v2.RandomAdjustSharpness(sharpness_factor=1.5, p=0.5),
+        # v2.ToImage(),
+        #
+        # # Geometric
+        # v2.RandomHorizontalFlip(p=0.5),
+        # v2.RandomVerticalFlip(p=0.5),
+        # v2.RandomChoice([
+        #     v2.Identity(),
+        #     v2.RandomRotation(degrees=(90, 90), expand=False),
+        #     v2.RandomRotation(degrees=(180, 180), expand=False),
+        #     v2.RandomRotation(degrees=(270, 270), expand=False)
+        # ]),
+        #
+        # v2.Resize((config["resolution"], config["resolution"]), antialias=True),
+        #
+        # # Color
+        # v2.RandomApply([
+        #     v2.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.4, hue=0.05)
+        # ], p=0.5),  # High probability!
+        # #v2.RandomAutocontrast(p=0.3),
+        # v2.RandomAdjustSharpness(sharpness_factor=1.5, p=0.5),
 
         # Blur
         #v2.RandomApply([v2.GaussianBlur(kernel_size=(11, 11), )], p=0.3),
@@ -380,8 +401,8 @@ def main(config, mode: str):
         )
     ])
     val_transforms = v2.Compose([
-        v2.ToImage(),
-        v2.Resize((config["resolution"], config["resolution"]), antialias=True),
+        # v2.ToImage(),
+        # v2.Resize((config["resolution"], config["resolution"]), antialias=True),
         v2.ToDtype(torch.float32, scale=True),
         v2.Normalize(
             mean=(0.485, 0.456, 0.406),
@@ -416,9 +437,8 @@ if __name__ == '__main__':
     parser.add_argument("--stage2_start_epoch", type=int, default=10)
 
     parser.add_argument("--model_name", type=str, default="facebook/dinov3-vits16-pretrain-lvd1689m")
-    parser.add_argument("--freeze_backbone", action="store_true")
+    parser.add_argument("--training_mode", type=str, default="freeze_backbone", choices=["full_finetune", "lora", "freeze_backbone"])
     parser.add_argument("--hidden_dim", type=int, default=128)
-    parser.add_argument("--predict_height", action="store_true")
 
     parser.add_argument("--resolution", type=int, default=768)
     parser.add_argument("--wandb_mode", type=str, default="online")
@@ -450,9 +470,8 @@ if __name__ == '__main__':
 
         # Model config
         "model_name": args.model_name,
-        "freeze_backbone": args.freeze_backbone,
+        "training_mode": args.training_mode,
         "hidden_dim": args.hidden_dim,
-        "predict_height": args.predict_height,
 
         # Other
         "resolution": args.resolution,
