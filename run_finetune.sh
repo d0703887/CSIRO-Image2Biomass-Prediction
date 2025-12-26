@@ -1,7 +1,7 @@
 #!/bin/bash
 
 
-python finetune_multi_scale.py \
+python finetune.py \
     --epochs 25 \
     --batch_size 2 \
     --lr 1e-4 \
