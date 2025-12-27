@@ -73,7 +73,7 @@ class DinoV3Backbone(nn.Module):
         _, num_patch, _ = patch_height.shape
         biomass = (patch_green + patch_clover + patch_dead).view(-1, 2, num_patch)  # (B, 2, num_patch)
         mask = (biomass > 0.0001).float()
-        masked_height_sum = (patch_height * mask).sum(dim=(1, 2))
+        masked_height_sum = (patch_height.view(-1, 2, num_patch) * mask).sum(dim=(1, 2))
         avg_height = masked_height_sum / (mask.sum(dim=(1, 2)) + 1e-6)
         return avg_height
 
