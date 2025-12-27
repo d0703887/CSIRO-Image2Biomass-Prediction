@@ -18,7 +18,7 @@ from dataset import CSIROMultiScaleDataset
 
 
 LOSS_KEYS = [
-    "Dry_Green_g", "Dry_Clover_g", "Dry_Dead_g"
+    "Dry_Green_g", "Dry_Clover_g", "Dry_Dead_g", "Avg_Height"
 ]
 
 class Trainer:
@@ -57,6 +57,7 @@ class Trainer:
         self.model_name = config["model_name"]
         self.training_mode = config["training_mode"]
         self.hidden_dim = config["hidden_dim"]
+        self.predict_height = config["predict_height"]
 
         # Other
         self.data_folder = config["data_folder"]
@@ -91,6 +92,7 @@ class Trainer:
             model_name=self.model_name,
             hidden_dim=self.hidden_dim,
             training_mode=self.training_mode,
+            predict_height=self.predict_height
         )
         return model
 
@@ -117,7 +119,7 @@ class Trainer:
         b_tmp = data_dict["HR_Input_Img"].shape[0]
         hr_input_imgs = data_dict["HR_Input_Img"].view(b_tmp * 2, 3, self.input_H, self.input_W)
         lr_input_imgs = data_dict["LR_Input_Img"].view(b_tmp * 2, 3, self.input_H // 2, self.input_W // 2)
-        pred_dict = model(hr_input_imgs, lr_input_imgs, mode="tiled")
+        pred_dict = model(hr_input_imgs, lr_input_imgs)
 
         loss_dict = {}
         total_loss = 0
@@ -439,6 +441,7 @@ if __name__ == '__main__':
     parser.add_argument("--model_name", type=str, default="facebook/dinov3-vits16-pretrain-lvd1689m")
     parser.add_argument("--training_mode", type=str, default="freeze_backbone", choices=["full_finetune", "lora", "freeze_backbone"])
     parser.add_argument("--hidden_dim", type=int, default=128)
+    parser.add_argument("--predict_height", action="store_true")
 
     parser.add_argument("--resolution", type=int, default=768)
     parser.add_argument("--wandb_mode", type=str, default="online")
@@ -472,6 +475,7 @@ if __name__ == '__main__':
         "model_name": args.model_name,
         "training_mode": args.training_mode,
         "hidden_dim": args.hidden_dim,
+        "predict_height": args.predict_height,
 
         # Other
         "resolution": args.resolution,
