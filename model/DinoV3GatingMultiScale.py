@@ -6,7 +6,7 @@ from model.MLP import MLP
 import math
 from peft import LoraConfig, get_peft_model
 
-class DinoV3BackboneMultiScale(nn.Module):
+class DinoV3GatingMultiScale(nn.Module):
     def __init__(
             self,
             model_name: str,
@@ -70,24 +70,21 @@ class DinoV3BackboneMultiScale(nn.Module):
             self.backbone.eval()
         return self
 
-    def aggregate_biomass(self, biomass, mode="tiled"):
-        if mode == "tiled":
-            _, num_patch, _ = biomass.shape
-            biomass = biomass.view(-1, 2, num_patch)
+    def aggregate_biomass(self, biomass):
+        _, num_patch, _ = biomass.shape
+        biomass = biomass.view(-1, 2, num_patch)
         agg = biomass.sum(dim=(1, 2))
         return agg
 
-    def aggregate_height(self, patch_height, weight, mode="tiled"):
-        if mode == "tiled":
-            _, num_patch, _ = patch_height.shape
-            patch_height = patch_height.view(-1, 2, num_patch)
-            weight = weight.view(-1, 2, num_patch)
-
+    def aggregate_height(self, patch_height, weight):
+        _, num_patch, _ = patch_height.shape
+        patch_height = patch_height.view(-1, 2, num_patch)
+        weight = weight.view(-1, 2, num_patch)
         weighted_sum = torch.sum(patch_height * weight, dim=(1, 2))
         weight_sum = torch.sum(weight, dim=(1, 2))
         return weighted_sum / (weight_sum + 1e-6)
 
-    def forward(self, high_res_x, low_res_x, mode="tiled", return_patch_preds=False, return_gates=False):
+    def forward(self, high_res_x, low_res_x, return_patch_preds=False, return_gates=False):
         high_res_out = self.backbone(high_res_x)
         low_res_out = self.backbone(low_res_x)
         hr_patch_feat = high_res_out.last_hidden_state[:, 5:, :]  # (B * 2, num_patch, embed_dim)
@@ -122,9 +119,9 @@ class DinoV3BackboneMultiScale(nn.Module):
         patch_dead = raw_dead * dead_gate
 
         # Aggregation
-        pred_green = self.aggregate_biomass(patch_green, mode)
-        pred_clover = self.aggregate_biomass(patch_clover, mode)
-        pred_dead = self.aggregate_biomass(patch_dead, mode)
+        pred_green = self.aggregate_biomass(patch_green)
+        pred_clover = self.aggregate_biomass(patch_clover)
+        pred_dead = self.aggregate_biomass(patch_dead)
 
         pred_dict = {
             "Dry_Green_g": pred_green,
@@ -137,7 +134,7 @@ class DinoV3BackboneMultiScale(nn.Module):
         if self.predict_height:
             weight = (green_gate + clover_gate + dead_gate).clamp(max=1.0)
             patch_height = self.height_mlp(patch_feature)
-            pred_dict["Avg_Height"] = self.aggregate_height(patch_height, weight, mode)
+            pred_dict["Avg_Height"] = self.aggregate_height(patch_height, weight)
 
 
         # TODO: do not return tiled value

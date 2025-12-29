@@ -6,7 +6,7 @@ from model.MLP import MLP
 import math
 from peft import LoraConfig, get_peft_model
 
-class DinoV3Backbone(nn.Module):
+class DinoV3MultiScale(nn.Module):
     def __init__(
             self,
             model_name: str,
@@ -49,13 +49,15 @@ class DinoV3Backbone(nn.Module):
 
         # fine-grained + coarse-grained feature
         make_head = lambda mode: MLP(self.embed_dim * 2, hidden_dim, mode=mode)
+
         # Biomass head
         self.green_mlp = make_head("biomass")
         self.clover_mlp = make_head("biomass")
         self.dead_mlp = make_head("biomass")
 
         # height head
-        self.height_mlp = make_head("height")
+        if self.predict_height:
+            self.height_mlp = make_head("height")
 
     def train(self, mode=True):
         super().train(mode)
