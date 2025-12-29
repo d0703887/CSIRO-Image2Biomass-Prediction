@@ -85,9 +85,9 @@ class CSIROMultiScaleDataset(Dataset):
                     v2.RandomRotation(degrees=(270, 270), expand=False)
                 ]),
                 # Color
-                v2.RandomApply([
-                    v2.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.4, hue=0.05)
-                ], p=0.5),  # High probability!
+                # v2.RandomApply([
+                #     v2.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.4, hue=0.05)
+                # ], p=0.5),  # High probability!
                 v2.RandomAdjustSharpness(sharpness_factor=1.5, p=0.5),
             ])
 
