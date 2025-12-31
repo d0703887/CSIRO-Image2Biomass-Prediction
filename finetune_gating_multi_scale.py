@@ -386,7 +386,7 @@ def main(config, mode: str):
     ])
 
     #train_idxs, val_idxs = CSIRO_group_k_fold(df)
-    train_idxs, val_idxs = CSIRO_stratified_group_k_fold(df, 6)
+    train_idxs, val_idxs = CSIRO_stratified_group_k_fold(df, 5)
 
     trainer = Trainer(
         df,
