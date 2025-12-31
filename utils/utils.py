@@ -3,7 +3,7 @@ from torchvision.transforms import v2
 import torch
 import pandas as pd
 import os
-from sklearn.model_selection import GroupKFold, train_test_split
+from sklearn.model_selection import GroupKFold, train_test_split, StratifiedGroupKFold
 
 def load_CSIRO(data_folder: str):
     # TODO: change data path
@@ -85,4 +85,26 @@ def CSIRO_group_k_fold(df: pd.DataFrame):
         train_idxs.append(train_idx)
         val_idxs.append(val_idx)
 
+    return train_idxs, val_idxs
+
+
+def CSIRO_stratified_group_k_fold(df: pd.DataFrame, n_splits: int = 5):
+    # 1. Create bins for stratification
+    df["stratify_bins"] = pd.qcut(df["Dry_Green_g"], q=10, labels=False, duplicates="drop")
+
+    # 2. Define Groups (Sampling_Date)
+    groups = df["Sampling_Date"]
+
+    # 3. Use StratifiedGroupKFold
+    sgkf = StratifiedGroupKFold(n_splits=n_splits)
+
+    train_idxs = []
+    val_idxs = []
+
+    # Note: We pass groups explicitly here
+    for train_idx, val_idx in sgkf.split(X=df, y=df["stratify_bins"], groups=groups):
+        train_idxs.append(train_idx)
+        val_idxs.append(val_idx)
+
+    df.drop(columns=["stratify_bins"], inplace=True)
     return train_idxs, val_idxs
