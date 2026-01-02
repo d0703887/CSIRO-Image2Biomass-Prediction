@@ -13,7 +13,7 @@ from datetime import datetime
 import argparse
 
 from model.DinoV3MultiScale import DinoV3MultiScale
-from utils.utils import load_CSIRO, CSIRO_group_k_fold
+from utils.utils import load_CSIRO, CSIRO_group_k_fold, CSIRO_stratified_group_k_fold
 from dataset import CSIROMultiScaleDataset
 
 
@@ -411,7 +411,7 @@ def main(config, mode: str):
         )
     ])
 
-    train_idxs, val_idxs = CSIRO_group_k_fold(df)
+    train_idxs, val_idxs = CSIRO_stratified_group_k_fold(df)
 
     trainer = Trainer(
         df,
