@@ -12,6 +12,9 @@ def load_CSIRO(data_folder: str):
         index=["image_path", "Sampling_Date", "State", "Species", "Pre_GSHH_NDVI", "Height_Ave_cm"],
         columns="target_name",
         values="target").reset_index()
+    #bad_images = ["ID230058600.jpg", "ID1403107574.jpg", "ID1761544403.jpg", "ID681680726.jpg"]
+    bad_images = ["train/ID230058600.jpg", "train/ID681680726.jpg", "train/ID1761544403.jpg", "train/ID1403107574.jpg", "train/ID443091455.jpg", "train/ID1717006117.jpg", "train/ID572336285.jpg", "train/"]
+    pivoted_df = pivoted_df[~pivoted_df['image_path'].isin(bad_images)].reset_index(drop=True)
     return pivoted_df
 
 def load_Grass(data_folder, df_name):
@@ -108,3 +111,11 @@ def CSIRO_stratified_group_k_fold(df: pd.DataFrame, n_splits: int = 5):
 
     df.drop(columns=["stratify_bins"], inplace=True)
     return train_idxs, val_idxs
+
+if __name__ == '__main__':
+    df = pd.read_csv(os.path.join("../data/CSIRO", "train.csv"))
+    pivoted_df = df.pivot_table(
+        index=["image_path", "Sampling_Date", "State", "Species", "Pre_GSHH_NDVI", "Height_Ave_cm"],
+        columns="target_name",
+        values="target").reset_index()
+    pivoted_df.to_csv("train_table.csv")

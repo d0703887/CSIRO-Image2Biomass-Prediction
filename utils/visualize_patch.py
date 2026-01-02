@@ -6,7 +6,7 @@ from torchvision.io import read_image
 import numpy as np
 
 # 1. Setup constants based on your description
-IMG_SIZE = (1024, 1024)  # The size you resize to
+IMG_SIZE = (512, 512)  # The size you resize to
 PATCH_SIZE = 16  # The patch size for the ViT/DinoV3
 
 
