@@ -9,9 +9,9 @@ python finetune_convnext.py \
     --loss_coefficient 0.33 0.33 0.34 0.0 \
     --model_name "facebook/dinov3-convnext-base-pretrain-lvd1689m" \
     --hidden_dim 128 \
-    --training_mode "full_finetune" \
+    --training_mode "freeze_backbone" \
     --resolution 1024 \
     --wandb_mode "online" \
-    --data_folder "/content/csiro_data/data" \
+    --data_folder "data/CSIRO" \
     --mode "single-fold" \
-    -stage2_start_epoch 10
+    #-stage2_start_epoch 10

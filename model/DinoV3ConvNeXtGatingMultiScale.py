@@ -48,25 +48,25 @@ class DinoV3ConvNeXtGatingMultiScale(nn.Module):
             raise ValueError(f"Unsupported Training Mode: {self.training_mode}")
 
         # Feature map fusion
-        self.proj_dim = 256
-        backbone_hidden_sizes = self.backbone.config.hidden_sizes
+        # self.proj_dim = 512
+        # backbone_hidden_sizes = self.backbone.config.hidden_sizes
         # self.proj_s1 = nn.Conv2d(backbone_hidden_sizes[0], self.proj_dim, kernel_size=1)
-        self.proj_s2 = nn.Conv2d(backbone_hidden_sizes[1], self.proj_dim, kernel_size=1)
-        self.proj_s3 = nn.Conv2d(backbone_hidden_sizes[2], self.proj_dim, kernel_size=1)
-        self.proj_s4 = nn.Conv2d(backbone_hidden_sizes[3], self.proj_dim, kernel_size=1)
+        # self.proj_s2 = nn.Conv2d(backbone_hidden_sizes[1], self.proj_dim, kernel_size=1)
+        # self.proj_s3 = nn.Conv2d(backbone_hidden_sizes[2], self.proj_dim, kernel_size=1)
+        # self.proj_s4 = nn.Conv2d(backbone_hidden_sizes[3], self.proj_dim, kernel_size=1)
 
-        # self.down_s1 = nn.Sequential(
+        # self.down_s2 = nn.Sequential(
         #     nn.Conv2d(self.proj_dim, self.proj_dim, kernel_size=3, stride=2, padding=1),  # 128x128
         #     nn.ReLU(),
         #     nn.Conv2d(self.proj_dim, self.proj_dim, kernel_size=3, stride=2, padding=1)  # 64x64
         # )
-        self.down_s2 = nn.Conv2d(self.proj_dim, self.proj_dim, kernel_size=3, stride=2, padding=1)
-        self.fusion = nn.Conv2d(self.proj_dim * 3, self.proj_dim, kernel_size=3, padding=1)
+        # self.down_s3 = nn.Conv2d(self.proj_dim, self.proj_dim, kernel_size=3, stride=2, padding=1)
+        # self.fusion = nn.Conv2d(self.proj_dim * 2, self.proj_dim, kernel_size=3, padding=1)
 
         # Biomass head
-        self.green_mlp = MLP(self.proj_dim, hidden_dim, mode="biomass")
-        self.clover_mlp = MLP(self.proj_dim, hidden_dim, mode="biomass")
-        self.dead_mlp = MLP(self.proj_dim, hidden_dim, mode="biomass")
+        self.green_mlp = MLP(self.embed_dim, hidden_dim, mode="biomass")
+        self.clover_mlp = MLP(self.embed_dim, hidden_dim, mode="biomass")
+        self.dead_mlp = MLP(self.embed_dim, hidden_dim, mode="biomass")
 
         # Gate MLP to prevent noise-cumulation
         # self.green_gate = MLP(self.embed_dim, hidden_dim, mode="gate")
@@ -89,21 +89,21 @@ class DinoV3ConvNeXtGatingMultiScale(nn.Module):
         agg = biomass.sum(dim=(1, 2))
         return agg
 
-    def fuse_feat_maps(self, feat_maps):
-        s1, s2, s3, s4 = feat_maps
-        # p1 = self.proj_s1(s1)
-        p2 = self.proj_s2(s2)
-        p3 = self.proj_s3(s3)
-        p4 = self.proj_s4(s4)
-
-        # out1 = self.down_s1(p1)
-        out2 = self.down_s2(p2)
-        out3 = p3
-        out4 = F.interpolate(p4, size=(64, 64), mode="bilinear", align_corners=False)
-        concat = torch.cat([out2, out3, out4], dim=1)
-        final_map = self.fusion(concat) # (B * 2, 128, 64, 64)
-        final_map = final_map.flatten(2).transpose(1, 2) # (B * 2, 64 * 64, 128)
-        return final_map
+    # def fuse_feat_maps(self, feat_maps):
+    #     s1, s2, s3, s4 = feat_maps
+    #     # p1 = self.proj_s1(s1)
+    #     # p2 = self.proj_s2(s2)
+    #     p3 = self.proj_s3(s3)
+    #     p4 = self.proj_s4(s4)
+    #
+    #     # out1 = self.down_s1(p1)
+    #     # out2 = self.down_s2(p2)
+    #     out3 = self.down_s3(p3)
+    #     out4 = p4
+    #     concat = torch.cat([out3, out4], dim=1)
+    #     final_map = self.fusion(concat) # (B * 2, 128, 64, 64)
+    #     final_map = final_map.flatten(2).transpose(1, 2) # (B * 2, 64 * 64, 128)
+    #     return final_map
 
     # def aggregate_height(self, patch_height, weight):
     #     _, num_patch, _ = patch_height.shape
@@ -115,8 +115,9 @@ class DinoV3ConvNeXtGatingMultiScale(nn.Module):
 
     def forward(self, x, return_patch_preds=False, return_gates=False):
         conv_out = self.backbone(x, output_hidden_states=True)
-        feat_maps = conv_out.hidden_states[1:]
-        final_map = self.fuse_feat_maps(feat_maps) # (B * 2, 64 * 64, 128)
+        # feat_maps = conv_out.hidden_states[1:]
+        # final_map = self.fuse_feat_maps(feat_maps) # (B * 2, 64 * 64, 128)
+        final_map = conv_out.last_hidden_state[:, 1:]
 
         # Biomass prediction (B * 2, height * width, 1)
         raw_green= self.green_mlp(final_map)
