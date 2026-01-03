@@ -12,9 +12,9 @@ import os
 from datetime import datetime
 import argparse
 
-from model.DinoV3MultiScale import DinoV3MultiScale
+from model.DinoV3ConvNeXtGatingMultiScale import DinoV3ConvNeXtGatingMultiScale
 from utils.utils import load_CSIRO, CSIRO_group_k_fold, CSIRO_stratified_group_k_fold
-from dataset import CSIROMultiScaleDataset
+from dataset import CSIRODataset
 
 
 LOSS_KEYS = [
@@ -54,6 +54,7 @@ class Trainer:
         self.stage2_start_epoch = config["stage2_start_epoch"]
 
         # Model config
+        self.gating = config["gating"]
         self.model_name = config["model_name"]
         self.training_mode = config["training_mode"]
         self.hidden_dim = config["hidden_dim"]
@@ -78,8 +79,8 @@ class Trainer:
         wandb_run = wandb.init(
             entity="d0703887",
             project="CSIRO",
-            name=f"{self.timestamp}_CSIRO_{fold_idx}",
-            group=f"{self.timestamp}_CSIRO",
+            name=f"{self.timestamp}_ConvNeXt_{fold_idx}",
+            group=f"{self.timestamp}__ConvNeXt_",
             config=self.config,
             mode=self.wandb_mode,
             dir=self.project_dir
@@ -87,11 +88,11 @@ class Trainer:
         return wandb_run
 
     def _initialize_model(self):
-        model = DinoV3MultiScale(
+        model = DinoV3ConvNeXtGatingMultiScale(
             model_name=self.model_name,
             hidden_dim=self.hidden_dim,
-            training_mode=self.training_mode,
-            predict_height=self.predict_height
+            predict_height=self.predict_height,
+            training_mode=self.training_mode
         )
         return model
 
@@ -115,10 +116,10 @@ class Trainer:
         if is_train:
             optimizer.zero_grad()
 
-        b_tmp = data_dict["HR_Input_Img"].shape[0]
-        hr_input_imgs = data_dict["HR_Input_Img"].view(b_tmp * 2, 3, self.input_H, self.input_W)
-        lr_input_imgs = data_dict["LR_Input_Img"].view(b_tmp * 2, 3, self.input_H // 2, self.input_W // 2)
-        pred_dict = model(hr_input_imgs, lr_input_imgs)
+        input_img = data_dict["Input_Img"]
+        b = input_img.shape[0]
+        input_img = input_img.view(b * 2, 3, self.input_H, self.input_W)
+        pred_dict = model(input_img)
 
         loss_dict = {}
         total_loss = 0
@@ -236,7 +237,7 @@ class Trainer:
         train_df = self.df.iloc[self.train_idxs[fold_idx]]
         val_df = self.df.iloc[self.val_idxs[fold_idx]]
         train_dataloader = DataLoader(
-            CSIROMultiScaleDataset(self.data_folder, train_df, self.input_H, self.input_W, self.train_transforms, is_train=True),
+            CSIRODataset(self.data_folder, train_df, self.train_transforms),
             batch_size=self.batch_size,
             shuffle=True,
             num_workers=4,
@@ -244,7 +245,7 @@ class Trainer:
             persistent_workers=True
         )
         val_dataloader = DataLoader(
-            CSIROMultiScaleDataset(self.data_folder, val_df, self.input_H, self.input_W, self.val_transforms, is_train=False),
+            CSIRODataset(self.data_folder, val_df, self.val_transforms),
             batch_size=self.batch_size,
             shuffle=False,
             num_workers=4,
@@ -370,29 +371,29 @@ class Trainer:
 def main(config, mode: str):
     df = load_CSIRO(config["data_folder"])
     train_transforms = v2.Compose([
-        # v2.ToImage(),
-        #
-        # # Geometric
-        # v2.RandomHorizontalFlip(p=0.5),
-        # v2.RandomVerticalFlip(p=0.5),
-        # v2.RandomChoice([
-        #     v2.Identity(),
-        #     v2.RandomRotation(degrees=(90, 90), expand=False),
-        #     v2.RandomRotation(degrees=(180, 180), expand=False),
-        #     v2.RandomRotation(degrees=(270, 270), expand=False)
-        # ]),
-        #
-        # v2.Resize((config["resolution"], config["resolution"]), antialias=True),
-        #
-        # # Color
+        v2.ToImage(),
+
+        # Geometric
+        v2.RandomHorizontalFlip(p=0.5),
+        v2.RandomVerticalFlip(p=0.5),
+        v2.RandomChoice([
+            v2.Identity(),
+            v2.RandomRotation(degrees=(90, 90), expand=False),
+            v2.RandomRotation(degrees=(180, 180), expand=False),
+            v2.RandomRotation(degrees=(270, 270), expand=False)
+        ]),
+
+        v2.Resize((config["resolution"], config["resolution"]), antialias=True),
+
+        # Color
         # v2.RandomApply([
         #     v2.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.4, hue=0.05)
         # ], p=0.5),  # High probability!
-        # #v2.RandomAutocontrast(p=0.3),
-        # v2.RandomAdjustSharpness(sharpness_factor=1.5, p=0.5),
+        # v2.RandomAutocontrast(p=0.3),
+        v2.RandomAdjustSharpness(sharpness_factor=1.5, p=0.5),
 
         # Blur
-        #v2.RandomApply([v2.GaussianBlur(kernel_size=(11, 11), )], p=0.3),
+        v2.RandomApply([v2.GaussianBlur(kernel_size=(11, 11), )], p=0.3),
 
         # Normalization
         v2.ToDtype(torch.float32, scale=True),
@@ -402,8 +403,8 @@ def main(config, mode: str):
         )
     ])
     val_transforms = v2.Compose([
-        # v2.ToImage(),
-        # v2.Resize((config["resolution"], config["resolution"]), antialias=True),
+        v2.ToImage(),
+        v2.Resize((config["resolution"], config["resolution"]), antialias=True),
         v2.ToDtype(torch.float32, scale=True),
         v2.Normalize(
             mean=(0.485, 0.456, 0.406),
@@ -437,6 +438,7 @@ if __name__ == '__main__':
     parser.add_argument("--loss_coefficient", type=float, nargs="+")
     parser.add_argument("--stage2_start_epoch", type=int, default=10)
 
+    parser.add_argument("--gating", action="store_true")
     parser.add_argument("--model_name", type=str, default="facebook/dinov3-vits16-pretrain-lvd1689m")
     parser.add_argument("--training_mode", type=str, default="freeze_backbone", choices=["full_finetune", "lora", "freeze_backbone"])
     parser.add_argument("--hidden_dim", type=int, default=128)
@@ -471,6 +473,7 @@ if __name__ == '__main__':
         "stage2_start_epoch": args.stage2_start_epoch,
 
         # Model config
+        "gating": args.gating,
         "model_name": args.model_name,
         "training_mode": args.training_mode,
         "hidden_dim": args.hidden_dim,
