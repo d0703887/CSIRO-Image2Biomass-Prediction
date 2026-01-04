@@ -52,6 +52,7 @@ class Trainer:
         self.lr = config["lr"]
         self.weight_decay = config["weight_decay"]
         self.stage2_start_epoch = config["stage2_start_epoch"]
+        self.accumulation_steps = config["accumulation_steps"]
 
         # Model config
         self.gating = config["gating"]
@@ -80,7 +81,7 @@ class Trainer:
             entity="d0703887",
             project="CSIRO",
             name=f"{self.timestamp}_ConvNeXt_{fold_idx}",
-            group=f"{self.timestamp}__ConvNeXt_",
+            group=f"{self.timestamp}__ConvNeXt",
             config=self.config,
             mode=self.wandb_mode,
             dir=self.project_dir
@@ -109,12 +110,12 @@ class Trainer:
 
         return global_means
 
-    def process_batch(self, model, optimizer, data_dict, is_train=True):
+    def process_batch(self, model, data_dict):
         for k, v in data_dict.items():
             data_dict[k] = v.to(self.device)
 
-        if is_train:
-            optimizer.zero_grad()
+        # if is_train:
+        #     optimizer.zero_grad()
 
         input_img = data_dict["Input_Img"]
         b = input_img.shape[0]
@@ -131,9 +132,9 @@ class Trainer:
                 total_loss += loss * self.loss_coefficient[k]
         loss_dict["main_loss"] = total_loss
 
-        if is_train:
-            total_loss.backward()
-            optimizer.step()
+        # if is_train:
+        #     total_loss.backward()
+        #     optimizer.step()
 
         detached_preds = {}
         for k, v in pred_dict.items():
@@ -148,8 +149,18 @@ class Trainer:
         all_preds = {k: [] for k in self.r2_coeff.keys()}
         all_targets = {k: [] for k in self.r2_coeff.keys()}
 
-        for data_dict in data_pbar:
-            loss_dict, preds = self.process_batch(model, optimizer, data_dict)
+        optimizer.zero_grad()
+
+        for i, data_dict in enumerate(data_pbar):
+            loss_dict, preds = self.process_batch(model, data_dict)
+
+            loss = loss_dict["main_loss"] / self.accumulation_steps
+            loss.backward()
+
+            if (i + 1) % self.accumulation_steps == 0 or (i + 1) == len(train_dataloader):
+                optimizer.step()
+                optimizer.zero_grad()
+
             data_pbar.set_postfix({"loss": loss_dict["main_loss"].item()})
 
             for k, v in loss_dict.items():
@@ -181,7 +192,7 @@ class Trainer:
 
         with torch.no_grad():
             for data_dict in data_pbar:
-                loss_dict, preds = self.process_batch(model, optimizer, data_dict, False)
+                loss_dict, preds = self.process_batch(model, data_dict)
                 data_pbar.set_postfix({"loss": loss_dict["main_loss"].item()})
 
                 for k, v in loss_dict.items():
@@ -267,14 +278,12 @@ class Trainer:
         model = self._initialize_model()
         model.to(self.device)
         optimizer = torch.optim.AdamW(model.parameters(), lr=self.lr, weight_decay=self.weight_decay)
-        if self.training_mode != "full_finetune":
-            scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-                    optimizer,
-                    T_max=self.epochs,
-                    eta_min=1e-5
-                )
-        else:
-            scheduler = None
+
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer,
+            T_max=self.stage2_start_epoch if self.training_mode == "full_finetune" else self.epochs,
+            eta_min=1e-5
+        )
 
         best_val_r2 = -float("inf")
         console = Console()
@@ -290,14 +299,24 @@ class Trainer:
                 print("Stage 2: Full Fine-Tune")
                 for param in model.backbone.parameters():
                     param.requires_grad = True
-                for g in optimizer.param_groups:
-                    g['lr'] = g['lr'] * 0.1
 
+                backbone_params = [p for n, p in model.named_parameters() if "backbone" in n]
+                head_params = [p for n, p in model.named_parameters() if "backbone" not in n]
+
+                stage2_head_lr = self.lr * 0.1  # e.g., 1e-5
+                stage2_backbone_lr = stage2_head_lr * 0.1  # e.g., 1e-6 (Critical!)
+
+                optimizer = torch.optim.AdamW([
+                    {'params': backbone_params, 'lr': stage2_backbone_lr},
+                    {'params': head_params, 'lr': stage2_head_lr}
+                ], weight_decay=self.weight_decay)
+
+                # 4. New Scheduler for remaining epochs
                 remaining_epochs = self.epochs - epoch + 1
                 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
                     optimizer,
                     T_max=remaining_epochs,
-                    eta_min=1e-6
+                    eta_min=1e-7
                 )
 
             train_metrics, train_pred_tables = self.train_one_epoch(model, optimizer, train_dataloader, epoch, train_global_mean)
@@ -386,9 +405,9 @@ def main(config, mode: str):
         v2.Resize((config["resolution"], config["resolution"]), antialias=True),
 
         # Color
-        # v2.RandomApply([
-        #     v2.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.4, hue=0.05)
-        # ], p=0.5),  # High probability!
+        v2.RandomApply([
+            v2.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.4, hue=0.05)
+        ], p=0.5),  # High probability!
         # v2.RandomAutocontrast(p=0.3),
         v2.RandomAdjustSharpness(sharpness_factor=1.5, p=0.5),
 
@@ -437,6 +456,7 @@ if __name__ == '__main__':
     parser.add_argument("--weight_decay", type=float, default=1e-4)
     parser.add_argument("--loss_coefficient", type=float, nargs="+")
     parser.add_argument("--stage2_start_epoch", type=int, default=10)
+    parser.add_argument("--accumulation_steps", type=int, default=1)
 
     parser.add_argument("--gating", action="store_true")
     parser.add_argument("--model_name", type=str, default="facebook/dinov3-vits16-pretrain-lvd1689m")
@@ -457,8 +477,8 @@ if __name__ == '__main__':
             f"Expected {len(LOSS_KEYS)} loss coefficients, but got {len(coeffs)}.\n"
             f"Required keys: {LOSS_KEYS}"
         )
-    if not torch.isclose(torch.tensor(sum(coeffs)), torch.tensor(1.0)):
-        raise ValueError(f"Loss coefficients must sum to 1. Current sum: {sum(coeffs)}")
+    # if not torch.isclose(torch.tensor(sum(coeffs)), torch.tensor(1.0)):
+    #     raise ValueError(f"Loss coefficients must sum to 1. Current sum: {sum(coeffs)}")
 
     loss_coefficient = dict(zip(LOSS_KEYS, coeffs))
 
@@ -471,6 +491,7 @@ if __name__ == '__main__':
         "lr": args.lr,
         "weight_decay": args.weight_decay,
         "stage2_start_epoch": args.stage2_start_epoch,
+        "accumulation_steps": args.accumulation_steps,
 
         # Model config
         "gating": args.gating,

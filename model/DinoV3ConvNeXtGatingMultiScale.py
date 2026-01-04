@@ -60,13 +60,14 @@ class DinoV3ConvNeXtGatingMultiScale(nn.Module):
         #     nn.ReLU(),
         #     nn.Conv2d(self.proj_dim, self.proj_dim, kernel_size=3, stride=2, padding=1)  # 64x64
         # )
-        # self.down_s3 = nn.Conv2d(self.proj_dim, self.proj_dim, kernel_size=3, stride=2, padding=1)
-        # self.fusion = nn.Conv2d(self.proj_dim * 2, self.proj_dim, kernel_size=3, padding=1)
+        # self.down_s3 = nn.Conv2d(backbone_hidden_sizes[2], backbone_hidden_sizes[2], kernel_size=3, stride=2, padding=1)
+        # self.fusion = nn.Conv2d(backbone_hidden_sizes[2] + backbone_hidden_sizes[3], self.proj_dim, kernel_size=1)
+        #self.fusion = nn.Conv2d(self.proj_dim * 2, self.proj_dim, kernel_size=3, padding=1)
 
         # Biomass head
-        self.green_mlp = MLP(self.embed_dim, hidden_dim, mode="biomass")
-        self.clover_mlp = MLP(self.embed_dim, hidden_dim, mode="biomass")
-        self.dead_mlp = MLP(self.embed_dim, hidden_dim, mode="biomass")
+        self.green_mlp = MLP(self.embed_dim * 2, hidden_dim, mode="biomass")
+        self.clover_mlp = MLP(self.embed_dim * 2, hidden_dim, mode="biomass")
+        self.dead_mlp = MLP(self.embed_dim * 2, hidden_dim, mode="biomass")
 
         # Gate MLP to prevent noise-cumulation
         # self.green_gate = MLP(self.embed_dim, hidden_dim, mode="gate")
@@ -93,16 +94,16 @@ class DinoV3ConvNeXtGatingMultiScale(nn.Module):
     #     s1, s2, s3, s4 = feat_maps
     #     # p1 = self.proj_s1(s1)
     #     # p2 = self.proj_s2(s2)
-    #     p3 = self.proj_s3(s3)
-    #     p4 = self.proj_s4(s4)
+    #     # p3 = self.proj_s3(s3)
+    #     # p4 = self.proj_s4(s4)
     #
     #     # out1 = self.down_s1(p1)
     #     # out2 = self.down_s2(p2)
-    #     out3 = self.down_s3(p3)
-    #     out4 = p4
+    #     out3 = s3
+    #     out4 = F.interpolate(s4, (s3.shape[-2:]), mode="bilinear", align_corners=False)
     #     concat = torch.cat([out3, out4], dim=1)
-    #     final_map = self.fusion(concat) # (B * 2, 128, 64, 64)
-    #     final_map = final_map.flatten(2).transpose(1, 2) # (B * 2, 64 * 64, 128)
+    #     # final_map = self.fusion(concat) # (B * 2, 128, 64, 64)
+    #     final_map = concat.flatten(2).transpose(1, 2) # (B * 2, 64 * 64, 128)
     #     return final_map
 
     # def aggregate_height(self, patch_height, weight):
@@ -117,7 +118,12 @@ class DinoV3ConvNeXtGatingMultiScale(nn.Module):
         conv_out = self.backbone(x, output_hidden_states=True)
         # feat_maps = conv_out.hidden_states[1:]
         # final_map = self.fuse_feat_maps(feat_maps) # (B * 2, 64 * 64, 128)
-        final_map = conv_out.last_hidden_state[:, 1:]
+
+        final_map = conv_out.last_hidden_state[:, 1:] # (B * 2, 32 * 32, 1024)
+        global_feat = conv_out.pooler_output# (B * 2, 1024)
+        expanded_global_feat = global_feat.unsqueeze(1).expand(-1, final_map.size(1), -1)
+        final_map = torch.cat([final_map, expanded_global_feat], dim=-1)
+
 
         # Biomass prediction (B * 2, height * width, 1)
         raw_green= self.green_mlp(final_map)
