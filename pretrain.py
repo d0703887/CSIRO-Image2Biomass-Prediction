@@ -12,7 +12,7 @@ import os
 from datetime import datetime
 import argparse
 
-from model.DinoV3BackboneGating import DinoV3BackboneGating
+from model.DinoV3ViT import DinoV3BackboneGating
 from utils.utils import merge_Irish_Grass, load_CSIRO
 from dataset import CombinedExternalDataset, CSIRODataset
 

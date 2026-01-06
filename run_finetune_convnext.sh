@@ -9,7 +9,7 @@ python finetune_convnext.py \
     --loss_coefficient 1 1 1 0.0 \
     --accumulation_steps 2 \
     --model_name "facebook/dinov3-convnext-base-pretrain-lvd1689m" \
-    --hidden_dim 512 \
+    --hidden_dim 256 \
     --training_mode "freeze_backbone" \
     --resolution 1024 \
     --wandb_mode "online" \

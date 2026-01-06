@@ -65,9 +65,9 @@ class DinoV3ConvNeXtGatingMultiScale(nn.Module):
         #self.fusion = nn.Conv2d(self.proj_dim * 2, self.proj_dim, kernel_size=3, padding=1)
 
         # Biomass head
-        self.green_mlp = MLP(self.embed_dim * 2, hidden_dim, mode="biomass")
-        self.clover_mlp = MLP(self.embed_dim * 2, hidden_dim, mode="biomass")
-        self.dead_mlp = MLP(self.embed_dim * 2, hidden_dim, mode="biomass")
+        self.green_mlp = MLP(self.embed_dim, hidden_dim, mode="biomass")
+        self.clover_mlp = MLP(self.embed_dim, hidden_dim, mode="biomass")
+        self.dead_mlp = MLP(self.embed_dim, hidden_dim, mode="biomass")
 
         # Gate MLP to prevent noise-cumulation
         # self.green_gate = MLP(self.embed_dim, hidden_dim, mode="gate")
@@ -118,17 +118,16 @@ class DinoV3ConvNeXtGatingMultiScale(nn.Module):
         conv_out = self.backbone(x, output_hidden_states=True)
         # feat_maps = conv_out.hidden_states[1:]
         # final_map = self.fuse_feat_maps(feat_maps) # (B * 2, 64 * 64, 128)
-
-        final_map = conv_out.last_hidden_state[:, 1:] # (B * 2, 32 * 32, 1024)
-        global_feat = conv_out.pooler_output# (B * 2, 1024)
-        expanded_global_feat = global_feat.unsqueeze(1).expand(-1, final_map.size(1), -1)
-        final_map = torch.cat([final_map, expanded_global_feat], dim=-1)
-
+        final_map = conv_out.pooler_output # (B * 2, 1024)
 
         # Biomass prediction (B * 2, height * width, 1)
         raw_green= self.green_mlp(final_map)
         raw_clover = self.clover_mlp(final_map)
         raw_dead = self.dead_mlp(final_map)
+
+        pred_green = raw_green.view(-1, 2).sum(dim=1)
+        pred_clover = raw_clover.view(-1, 2).sum(dim=1)
+        pred_dead = raw_dead.view(-1, 2).sum(dim=1)
 
         # # Gates
         # green_gate = self.green_gate(feats)
@@ -141,9 +140,9 @@ class DinoV3ConvNeXtGatingMultiScale(nn.Module):
         # patch_dead = raw_dead * dead_gate
 
         # Aggregation
-        pred_green = self.aggregate_biomass(raw_green)
-        pred_clover = self.aggregate_biomass(raw_clover)
-        pred_dead = self.aggregate_biomass(raw_dead)
+        # pred_green = self.aggregate_biomass(raw_green)
+        # pred_clover = self.aggregate_biomass(raw_clover)
+        # pred_dead = self.aggregate_biomass(raw_dead)
 
         pred_dict = {
             "Dry_Green_g": pred_green,
