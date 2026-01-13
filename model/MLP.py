@@ -10,12 +10,13 @@ class MLP(nn.Module):
             mode: str = "biomass"
     ):
         super().__init__()
+        self.mode = mode
         if mode == "biomass":
-            final_act = nn.Softplus()
+            self.final_act = nn.Softplus(beta=5)
         elif mode == "gate":
-            final_act = nn.Sigmoid()
+            self.final_act = nn.Sigmoid()
         elif mode == "height":
-            final_act = nn.Identity()
+            self.final_act = nn.Identity()
         else:
             raise ValueError(f"Unsupported mode: {mode}")
 
@@ -24,13 +25,16 @@ class MLP(nn.Module):
             nn.SiLU(),
             nn.Dropout(dropout),
             nn.Linear(hidden_dim, output_dim),
-            final_act
         )
 
         # Initialize the final linear layer to stabilize training
         if mode == "biomass":
-            nn.init.normal_(self.mlp[-2].weight, mean=0.0, std=1e-5)
-            nn.init.constant_(self.mlp[-2].bias, -5.0)
+            nn.init.normal_(self.mlp[-1].weight, mean=0.0, std=1e-5)
+            nn.init.constant_(self.mlp[-1].bias, -0.6)
 
     def forward(self, x):
-        return self.mlp(x)
+        logits = self.mlp(x)
+        if self.mode == "gate":
+            return self.final_act(logits)
+        else:
+            return self.final_act(logits)

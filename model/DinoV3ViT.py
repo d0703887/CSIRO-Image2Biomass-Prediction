@@ -13,10 +13,12 @@ class DinoV3ViT(nn.Module):
             hidden_dim: int,
             training_mode: str = "freeze_backbone",
             predict_height: bool = False,
+            split_img: bool = True
     ):
         super().__init__()
         self.training_mode = training_mode
         self.predict_height = predict_height
+        self.split_img = split_img
 
         # DinoV3
         self.backbone = AutoModel.from_pretrained(
@@ -44,16 +46,21 @@ class DinoV3ViT(nn.Module):
         elif self.training_mode != "full_finetune":
             raise ValueError(f"Unsupported Training Mode: {self.training_mode}")
 
-        make_head = lambda mode: MLP(self.embed_dim * 2, hidden_dim, mode=mode)
+        make_head = lambda mode: MLP(self.embed_dim * 2, hidden_dim, mode=mode, dropout=0.6)
 
         # Biomass head
         self.green_mlp = make_head("biomass")
         self.clover_mlp = make_head("biomass")
         self.dead_mlp = make_head("biomass")
 
+        # Gate
+        # self.green_gate = MLP(self.embed_dim * 2, hidden_dim // 2, mode="gate", dropout=0.6)
+        # self.clover_gate = MLP(self.embed_dim * 2, hidden_dim // 2, mode="gate", dropout=0.6)
+        # self.dead_gate = MLP(self.embed_dim * 2, hidden_dim // 2, mode="gate", dropout=0.6)
+
         # Auxiliary height prediction
         if self.predict_height:
-            self.height_mlp = make_head("height")
+            self.height_mlp = MLP(self.embed_dim, hidden_dim, mode="height", dropout=0.6)
 
     def train(self, mode=True):
         super().train(mode)
@@ -63,11 +70,12 @@ class DinoV3ViT(nn.Module):
 
     def aggregate_biomass(self, biomass):
         _, num_patch, _ = biomass.shape
-        biomass = biomass.view(-1, 2, num_patch)
+        if self.split_img:
+            biomass = biomass.view(-1, 2, num_patch)  # (B, 2, num_patch)
         agg = biomass.sum(dim=(1, 2))
         return agg
 
-    def forward(self, x, return_patch_preds=False):
+    def forward(self, x, return_patch_preds=False, return_gates=False):
         """
 
         :param x: shape (B, C, H, W)
@@ -84,15 +92,15 @@ class DinoV3ViT(nn.Module):
         raw_clover = self.clover_mlp(fused_feature)
         raw_dead = self.dead_mlp(fused_feature)
 
-        # Gates
-        # green_gate = self.green_gate(patch_feature)
-        # clover_gate = self.clover_gate(patch_feature)
-        # dead_gate = self.dead_gate(patch_feature)
+        # Gate
+        # green_gate = self.green_gate(fused_feature)
+        # clover_gate = self.clover_gate(fused_feature)
+        # dead_gate = self.dead_gate(fused_feature)
 
-        # Apply gates
-        # patch_green = raw_green * green_gate
-        # patch_clover = raw_clover * clover_gate
-        # patch_dead = raw_dead * dead_gate
+        # Apply gating
+        # raw_green *= green_gate
+        # raw_clover *= clover_gate
+        # raw_dead *= dead_gate
 
         # Aggregation
         pred_green = self.aggregate_biomass(raw_green)
@@ -107,19 +115,9 @@ class DinoV3ViT(nn.Module):
             "GDM_g": pred_green + pred_clover
         }
 
-        # if self.predict_height:
-        #     weight = (green_gate + clover_gate + dead_gate).clamp(max=1.0)
-        #     patch_height = self.height_mlp(patch_feature)
-        #     pred_dict["Avg_Height"] = self.aggregate_height(patch_height, weight, mode)
-
-
-        # TODO: do not return tiled value
-        # if return_gates:
-        #     pred_dict.update({
-        #         "Tile_Gate_Dry_Green_g": green_gate,
-        #         "Tile_Gate_Dry_Clover_g": clover_gate,
-        #         "Tile_Gate_Dry_Dead_g": dead_gate
-        #     })
+        if self.predict_height:
+            pred_height = self.height_mlp(global_feature).squeeze(-1)
+            pred_dict["Height_Ave_cm"] = pred_height
 
         if return_patch_preds:
             pred_dict.update({
@@ -127,6 +125,13 @@ class DinoV3ViT(nn.Module):
                 "Tile_Dry_Clover_g": raw_clover,
                 "Tile_Dry_Dead_g": raw_dead
             })
+
+        # if return_gates:
+        #     pred_dict.update({
+        #         "Tile_Gate_Dry_Green_g": green_gate,
+        #         "Tile_Gate_Dry_Clover_g": clover_gate,
+        #         "Tile_Gate_Dry_Dead_g": dead_gate,
+        #     })
 
         return pred_dict
 

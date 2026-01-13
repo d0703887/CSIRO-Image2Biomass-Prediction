@@ -11,13 +11,49 @@ class CSIRODataset(Dataset):
             self,
             data_folder: str,
             df: pd.DataFrame,
-            transform = None,
+            input_h,
+            input_w,
+            split_img = True,
+            is_train = True,
     ):
         self.data_folder = data_folder
         self.df = df
-        self.transform = transform
+        self.split_img = split_img
+        self.is_train = is_train
+        self.input_h = input_h
+        self.input_w = input_w
+
+
+        self.geometric_transform = v2.Compose([
+            v2.RandomHorizontalFlip(p=0.5),
+            v2.RandomVerticalFlip(p=0.5),
+            v2.RandomChoice([
+                v2.Identity(),
+                v2.RandomRotation(degrees=(90, 90), expand=False),
+                v2.RandomRotation(degrees=(180, 180), expand=False),
+                v2.RandomRotation(degrees=(270, 270), expand=False)
+            ]),
+        ])
+
+        self.resize = v2.Resize((input_h, input_w), antialias=True)
+
+        self.color_transform = v2.Compose([
+            v2.RandomApply([
+                v2.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.4, hue=0.05)
+            ], p=0.5),  # High probability!
+            v2.RandomAdjustSharpness(sharpness_factor=1.5, p=0.5),
+        ])
+
+        self.normalize_transform = v2.Compose([
+            v2.ToDtype(torch.float32, scale=True),
+            v2.Normalize(
+                mean=(0.485, 0.456, 0.406),
+                std=(0.229, 0.224, 0.225),
+            )
+        ])
 
         self.img_paths = df["image_path"].tolist()
+        self.species = df["Species"].tolist()
         self.data_values = df[[
             "Height_Ave_cm", "Dry_Green_g", "Dry_Clover_g", "Dry_Dead_g", "Dry_Total_g", "GDM_g"
         ]].to_dict('records')
@@ -25,7 +61,7 @@ class CSIRODataset(Dataset):
     def __len__(self):
         return len(self.df)
 
-    def split_img(self, image):
+    def split_left_and_right(self, image):
         _, _, w = image.shape
         center = w // 2
         left_img = image[:, :, :center]
@@ -35,21 +71,57 @@ class CSIRODataset(Dataset):
     def __getitem__(self, idx):
         img_path = os.path.join(self.data_folder, self.img_paths[idx])
         img = read_image(img_path)
-        left_img, right_img = self.split_img(img)
-        if self.transform:
-            left_img = self.transform(left_img)
-            right_img = self.transform(right_img)
-        input_img = torch.cat([left_img, right_img]) # (2, C, H, W)
+
+        gate_names = ["green", "clover", "dead"]
+        masks = []
+
+        for name in gate_names:
+            path = os.path.join(self.data_folder, f"pseudo_gates/{name}", os.path.basename(img_path))
+            if os.path.exists(path):
+                # Read, convert to binary 0/1 float, ensure 1 channel
+                m = (read_image(path) > 0).float()
+            else:
+                # Create empty mask with same H,W as image
+                m = -torch.ones((1, 48, 96), dtype=torch.float32)
+            masks.append(m)
+
+        mask_tensor = torch.cat(masks, dim=0)
+
+        if self.split_img:
+            left_img, right_img = self.split_left_and_right(img)
+            if self.transform:
+                left_img = self.transform(left_img)
+                right_img = self.transform(right_img)
+            input_img = torch.cat([left_img, right_img]) # (2, C, H, W)
+        else:
+            img = v2.ToImage()(img)
+            if self.is_train:
+                img, mask_tensor = self.geometric_transform(img, mask_tensor)
+                img = self.resize(img)
+                img = self.color_transform(img)
+            else:
+                img = self.resize(img)
+
+            img = self.normalize_transform(img)
+            input_img = img
+
         row = self.data_values[idx]
-        return {
+        data_dict =  {
             "Input_Img": input_img,
-            "Avg_Height": torch.tensor(row["Height_Ave_cm"], dtype=torch.float32),
+            "Height_Ave_cm": torch.tensor(row["Height_Ave_cm"], dtype=torch.float32),
             "Dry_Green_g": torch.tensor(row["Dry_Green_g"], dtype=torch.float32),
             "Dry_Clover_g": torch.tensor(row["Dry_Clover_g"], dtype=torch.float32),
             "Dry_Dead_g": torch.tensor(row["Dry_Dead_g"], dtype=torch.float32),
             "Dry_Total_g": torch.tensor(row["Dry_Total_g"], dtype=torch.float32),
+            "Dry_Green_g_Gate": mask_tensor[0].view(96 * 48, 1),
+            "Dry_Clover_g_Gate": mask_tensor[1].view(96 * 48, 1),
+            "Dry_Dead_g_Gate": mask_tensor[2].view(96 * 48, 1),
             "GDM_g": torch.tensor(row["GDM_g"], dtype=torch.float32),
+            "image_path": img_path,
+            "species": self.species[idx]
         }
+
+        return data_dict
 
 class CSIROMultiScaleDataset(Dataset):
     def __init__(

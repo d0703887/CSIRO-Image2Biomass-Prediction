@@ -12,8 +12,12 @@ def load_CSIRO(data_folder: str):
         index=["image_path", "Sampling_Date", "State", "Species", "Pre_GSHH_NDVI", "Height_Ave_cm"],
         columns="target_name",
         values="target").reset_index()
-    #bad_images = ["ID230058600.jpg", "ID1403107574.jpg", "ID1761544403.jpg", "ID681680726.jpg"]
-    bad_images = ["train/ID230058600.jpg", "train/ID681680726.jpg", "train/ID1761544403.jpg", "train/ID1403107574.jpg", "train/ID443091455.jpg", "train/ID1717006117.jpg", "train/ID572336285.jpg", "train/"]
+
+    bad_images = [
+        # Clover
+        "train/ID230058600.jpg", "train/ID681680726.jpg", "train/ID1761544403.jpg", "train/ID1403107574.jpg", "train/ID443091455.jpg", "train/ID1717006117.jpg", "train/ID572336285.jpg",
+        # Green
+        "train/ID1337107565.jpg", "train/ID1139918758.jpg", "train/ID40849327.jpg"]
     pivoted_df = pivoted_df[~pivoted_df['image_path'].isin(bad_images)].reset_index(drop=True)
     return pivoted_df
 
