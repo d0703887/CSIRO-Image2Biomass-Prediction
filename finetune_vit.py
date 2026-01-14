@@ -522,7 +522,7 @@ def main(config, mode: str):
     if mode == "cross-validation":
         trainer.cross_validation()
     elif mode == "single-fold":
-        trainer.train_one_fold(1)
+        trainer.train_one_fold(0)
     else:
         raise RuntimeError(f"Unsupported mode: {mode}")
 
