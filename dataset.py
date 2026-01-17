@@ -37,12 +37,12 @@ class CSIRODataset(Dataset):
 
         self.resize = v2.Resize((input_h, input_w), antialias=True)
 
-        self.color_transform = v2.Compose([
-            v2.RandomApply([
-                v2.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.4, hue=0.05)
-            ], p=0.5),  # High probability!
-            v2.RandomAdjustSharpness(sharpness_factor=1.5, p=0.5),
-        ])
+        # self.color_transform = v2.Compose([
+        #     v2.RandomApply([
+        #         v2.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.4, hue=0.05)
+        #     ], p=0.5),  # High probability!
+        #     v2.RandomAdjustSharpness(sharpness_factor=1.5, p=0.5),
+        # ])
 
         self.normalize_transform = v2.Compose([
             v2.ToDtype(torch.float32, scale=True),
@@ -58,6 +58,23 @@ class CSIRODataset(Dataset):
             "Height_Ave_cm", "Dry_Green_g", "Dry_Clover_g", "Dry_Dead_g", "Dry_Total_g", "GDM_g"
         ]].to_dict('records')
 
+        self.bad_images = {
+            "Dry_Green_g": [
+                "ID1139918758.jpg",
+                "ID1337107565.jpg",
+                "ID1403107574.jpg",
+                "ID1761544403.jpg",
+                "ID40849327.jpg",
+                "ID473494649.jpg",
+                "ID681680726.jpg",
+                "ID697718693.jpg",
+            ],
+            "Dry_Clover_g": [
+                "ID1403107574.jpg"
+            ],
+            "Dry_Dead_g": []
+        }
+
     def __len__(self):
         return len(self.df)
 
@@ -71,12 +88,13 @@ class CSIRODataset(Dataset):
     def __getitem__(self, idx):
         img_path = os.path.join(self.data_folder, self.img_paths[idx])
         img = read_image(img_path)
+        img_basename = os.path.basename(img_path)
 
         gate_names = ["green", "clover", "dead"]
         masks = []
 
         for name in gate_names:
-            path = os.path.join(self.data_folder, f"pseudo_gates/{name}", os.path.basename(img_path))
+            path = os.path.join(self.data_folder, f"pseudo_gates/{name}", img_basename)
             if os.path.exists(path):
                 # Read, convert to binary 0/1 float, ensure 1 channel
                 m = (read_image(path) > 0).float()
@@ -98,7 +116,7 @@ class CSIRODataset(Dataset):
             if self.is_train:
                 img, mask_tensor = self.geometric_transform(img, mask_tensor)
                 img = self.resize(img)
-                img = self.color_transform(img)
+                #img = self.color_transform(img)
             else:
                 img = self.resize(img)
 
@@ -109,9 +127,9 @@ class CSIRODataset(Dataset):
         data_dict =  {
             "Input_Img": input_img,
             "Height_Ave_cm": torch.tensor(row["Height_Ave_cm"], dtype=torch.float32),
-            "Dry_Green_g": torch.tensor(row["Dry_Green_g"], dtype=torch.float32),
-            "Dry_Clover_g": torch.tensor(row["Dry_Clover_g"], dtype=torch.float32),
-            "Dry_Dead_g": torch.tensor(row["Dry_Dead_g"], dtype=torch.float32),
+            "Dry_Green_g": torch.tensor(row["Dry_Green_g"], dtype=torch.float32) if img_basename not in self.bad_images["Dry_Green_g"] else torch.tensor(-1, dtype=torch.float32),
+            "Dry_Clover_g": torch.tensor(row["Dry_Clover_g"], dtype=torch.float32) if img_basename not in self.bad_images["Dry_Clover_g"] else torch.tensor(-1, dtype=torch.float32),
+            "Dry_Dead_g": torch.tensor(row["Dry_Dead_g"], dtype=torch.float32) if img_basename not in self.bad_images["Dry_Dead_g"] else torch.tensor(-1, dtype=torch.float32),
             "Dry_Total_g": torch.tensor(row["Dry_Total_g"], dtype=torch.float32),
             "Dry_Green_g_Gate": mask_tensor[0].view(96 * 48, 1),
             "Dry_Clover_g_Gate": mask_tensor[1].view(96 * 48, 1),

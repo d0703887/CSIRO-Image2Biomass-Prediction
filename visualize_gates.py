@@ -90,20 +90,23 @@ def get_gates_and_metadata(model, device, data_dict, config):
 
 def visualize_cv2_multiclass(gates, img_tensor, img_path, species, gts, config, unorm):
     # --- WINDOW SETUP ---
-    # We now have two separate windows
     base_name = os.path.basename(img_path)
+    target_class = config["target_class"]
+
     win_input = f"Input View | {base_name}"
-    win_masks = f"Mask Editor | {base_name}"
+    win_masks = f"Mask Editor ({target_class}) | {base_name}"
 
     cv2.namedWindow(win_input, cv2.WINDOW_NORMAL)
     cv2.namedWindow(win_masks, cv2.WINDOW_NORMAL)
 
-    CLASSES = ["Green", "Clover", "Dead"]
+    # Filter CLASSES to only the target class
+    CLASSES = [target_class]
+
     # Distinct colors for visualization overlays (BGR)
     CLASS_COLORS = {
         "Green": (0, 255, 0),  # Green
-        "Clover": (255, 100, 0),  # Blueish
-        "Dead": (0, 0, 255)  # Red
+        "Clover": (0, 255, 0),  # Blue
+        "Dead": (0, 255, 0)  # Red
     }
 
     patch_h = config["input_h"] // 16
@@ -182,7 +185,6 @@ def visualize_cv2_multiclass(gates, img_tensor, img_path, species, gts, config, 
         "img_w": view_items[0]["img"].shape[1],
         "grid_h": patch_h,
         "grid_w": patch_w,
-        # UPDATED: Panel order only contains the classes, because Input is now in a separate window
         "panel_order": CLASSES
     }
 
@@ -196,28 +198,22 @@ def visualize_cv2_multiclass(gates, img_tensor, img_path, species, gts, config, 
 
     apply_thresholds()
 
-    # --- 4. Mouse Callback (Attached to Mask Editor) ---
+    # --- 4. Mouse Callback ---
     def modify_grid(x, y, action_val):
-        # Determine Split (Column)
         split_idx = x // state["img_w"]
         if split_idx >= len(state["view_items"]): return
 
-        # Determine Class (Row)
-        # Since we removed "Input" from this window, y=0 starts at Green
         row_idx = y // state["img_h"]
         if row_idx >= len(state["panel_order"]): return
 
         target_panel = state["panel_order"][row_idx]
 
-        # Local Coordinates
         local_x = x % state["img_w"]
         local_y = y % state["img_h"]
 
-        # Map to Grid
         grid_x = int(local_x / state["img_w"] * state["grid_w"])
         grid_y = int(local_y / state["img_h"] * state["grid_h"])
 
-        # Brush Logic
         bs = state["brush_size"]
         half_bs = bs // 2
 
@@ -250,22 +246,11 @@ def visualize_cv2_multiclass(gates, img_tensor, img_path, species, gts, config, 
             if state["drawing_action"] is not None:
                 modify_grid(x, y, state["drawing_action"])
 
-    # Attach mouse interaction ONLY to the Mask Editor window
     cv2.setMouseCallback(win_masks, on_mouse)
 
     # --- 5. Trackbar Callbacks ---
-    def on_trackbar_green(val):
-        state["class_stats"]["Green"]["thresh_ratio"] = val / 100.0
-        apply_thresholds()
-        update_display()
-
-    def on_trackbar_clover(val):
-        state["class_stats"]["Clover"]["thresh_ratio"] = val / 100.0
-        apply_thresholds()
-        update_display()
-
-    def on_trackbar_dead(val):
-        state["class_stats"]["Dead"]["thresh_ratio"] = val / 100.0
+    def on_trackbar_change(val):
+        state["class_stats"][target_class]["thresh_ratio"] = val / 100.0
         apply_thresholds()
         update_display()
 
@@ -280,8 +265,10 @@ def visualize_cv2_multiclass(gates, img_tensor, img_path, species, gts, config, 
             text_on_img(input_panel, f"Input ({item['label']})")
             text_on_img(input_panel, f"Species: {species}", pos=(20, 80), scale=0.7)
             y_txt = 120
+            # Show all GTs for context
             for k, v in gts.items():
-                text_on_img(input_panel, f"GT {k}: {v:.3f}g", pos=(20, y_txt), scale=1.2, color=(0, 0, 0))
+                col = (0, 255, 0) if k == target_class else (0, 0, 0)
+                text_on_img(input_panel, f"GT {k}: {v:.3f}g", pos=(20, y_txt), scale=0.7, color=col)
                 y_txt += 35
             final_input_cols.append(input_panel)
 
@@ -290,18 +277,17 @@ def visualize_cv2_multiclass(gates, img_tensor, img_path, species, gts, config, 
             for i, cls_name in enumerate(CLASSES):
                 if cls_name in item["classes"]:
                     data = item["classes"][cls_name]
-                    overlay = create_overlay(item["img"], data["mask"], color=CLASS_COLORS[cls_name])
+                    # Use existing color dict or default red if missing
+                    color_bgr = CLASS_COLORS.get(cls_name, (0, 0, 255))
+                    overlay = create_overlay(item["img"], data["mask"], color=color_bgr)
 
                     # Add info
                     max_v = state["class_stats"][cls_name]["global_max"]
                     thresh_pct = int(state["class_stats"][cls_name]["thresh_ratio"] * 100)
 
-                    # Add Brush Info to the top panel (Green) so user sees it while editing
-                    if i == 0:
-                        text_on_img(overlay, f"{cls_name} | Brush: {state['brush_size']} | Thresh: {thresh_pct}%",
-                                    pos=(20, 40))
-                    else:
-                        text_on_img(overlay, f"{cls_name} | Thresh: {thresh_pct}%", pos=(20, 40))
+                    # Add Brush Info
+                    text_on_img(overlay, f"{cls_name} | Brush: {state['brush_size']} | Thresh: {thresh_pct}%",
+                                pos=(20, 40))
 
                     mask_v_stack.append(overlay)
                 else:
@@ -320,36 +306,30 @@ def visualize_cv2_multiclass(gates, img_tensor, img_path, species, gts, config, 
         cv2.imshow(win_masks, mask_canvas)
 
     # --- Window Init ---
-    # Input Window Size
     h_in = state["img_h"]
     w_total = state["img_w"] * len(state["view_items"])
-    # Resize Input window slightly smaller as it's just reference
     cv2.resizeWindow(win_input, int(w_total * 0.5), int(h_in * 0.5))
 
-    # Mask Window Size (3 panels high)
-    h_mask = state["img_h"] * 3
-    # Scale to fit screen height approx 1000px
-    target_h = 1000
+    # Mask Window Size (1 panel high now)
+    h_mask = state["img_h"] * len(CLASSES)
+    # Scale to fit screen height approx 1000px or actual height if smaller
+    target_h = min(1000, h_mask)
     scale_ratio = target_h / h_mask
     target_w = int(w_total * scale_ratio)
     cv2.resizeWindow(win_masks, target_w, target_h)
 
-    # Attach Trackbars to Mask Window
-    cv2.createTrackbar("Green %", win_masks, 5, 100, on_trackbar_green)
-    cv2.createTrackbar("Clover %", win_masks, 5, 100, on_trackbar_clover)
-    cv2.createTrackbar("Dead %", win_masks, 5, 100, on_trackbar_dead)
+    # Attach Trackbar for Target Class
+    cv2.createTrackbar(f"{target_class} %", win_masks, 5, 100, on_trackbar_change)
 
     update_display()
     print(f"Controls: [Mouse] Draw on Mask Window, [Scroll] Brush Size, [n] Save & Next, [q] Quit")
 
     while True:
-        # We need to waitKey generally; it catches events for all CV2 windows
         key = cv2.waitKey(1)
         if key == ord('q') or key == 27:
             cv2.destroyAllWindows()
             sys.exit(0)
         elif key == ord('n') or key == 32:
-            # SAVE LOGIC (Unchanged)
             base_name = os.path.basename(img_path)
             for cls_name in CLASSES:
                 masks = []
@@ -359,7 +339,7 @@ def visualize_cv2_multiclass(gates, img_tensor, img_path, species, gts, config, 
                 if not masks: continue
                 final_mask = np.hstack(masks)
                 final_mask = (final_mask * 255).astype(np.uint8)
-                save_dir = f"data/CSIRO/new_pseudo_gates/{cls_name.lower()}"
+                save_dir = f"data/CSIRO/pseudo_gates/{cls_name.lower()}"
                 os.makedirs(save_dir, exist_ok=True)
                 cv2.imwrite(os.path.join(save_dir, base_name), final_mask)
                 print(f"Saved {cls_name} mask.")
@@ -374,6 +354,9 @@ def visualize_cv2_multiclass(gates, img_tensor, img_path, species, gts, config, 
 def main(config):
     device = "cuda" if torch.cuda.is_available() else "cpu"
     unorm = UnNormalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225))
+
+    # Capitalize target class (Green, Clover, Dead) to match dict keys
+    config["target_class"] = config["target_class"].capitalize()
 
     print(f"Loading data from {config['data_folder']}...")
     df = load_CSIRO(config["data_folder"])
@@ -397,11 +380,14 @@ def main(config):
     model.to(device)
     model.eval()
 
-    print(f"\nStarting Multi-Class Interactive Session...")
+    print(f"\nStarting Interactive Session for Class: {config['target_class']}...")
 
     for i, data_dict in enumerate(dataloader):
-        # Optional: Check if already processed (check if Green file exists for now)
-        check_path = os.path.join(f"data/CSIRO/new_pseudo_gates/green", os.path.basename(data_dict["image_path"][0]))
+        # Check if this specific class has already been processed
+        target_subfolder = config["target_class"].lower()
+        check_path = os.path.join(f"data/CSIRO/pseudo_gates/{target_subfolder}",
+                                  os.path.basename(data_dict["image_path"][0]))
+
         if os.path.exists(check_path):
             continue
 
@@ -410,11 +396,12 @@ def main(config):
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description="Multi-Class Interactive Gate Refinement")
+    parser = argparse.ArgumentParser(description="Class-Specific Interactive Gate Refinement")
     parser.add_argument("--checkpoint_path", type=str, required=True)
-    # target_class removed as we now do all simultaneously
+    parser.add_argument("--target_class", type=str, required=True,
+                        help="Target class to refine: Green, Clover, or Dead")
     parser.add_argument("--data_folder", type=str, default="data/CSIRO")
-    parser.add_argument("--model_name", type=str, default="facebook/dinov3-vits16-pretrain-lvd1689m")
+    parser.add_argument("--model_name", type=str, default="facebook/dinov3-vits16plus-pretrain-lvd1689m")
     parser.add_argument("--hidden_dim", type=int, default=512)
     parser.add_argument("--split_img", action="store_true")
     parser.add_argument("--input_h", type=int, default=1024)

@@ -156,17 +156,39 @@ class Trainer:
         loss_dict = {}
         total_loss = 0
         for k in ["Dry_Green_g", "Dry_Clover_g", "Dry_Dead_g"]:
-            loss = self.regression_loss_fn(pred_dict[k], data_dict[k])
-            loss_dict[k] = loss
-            total_loss += loss * self.loss_coefficient[k]
+            target = data_dict[k]
+            pred = pred_dict[k]
+            valid_mask = (target != -1)
+
+            # Regression loss
+            valid_pred = pred[valid_mask]
+            valid_target = target[valid_mask]
+            if valid_mask.sum() > 0:
+                loss = self.regression_loss_fn(valid_pred, valid_target)
+                loss_dict[k] = loss
+                total_loss += loss * self.loss_coefficient[k]
+            else:
+                # If all images in this batch are 'bad', loss is 0 for this trait
+                loss_dict[k] = torch.tensor(0.0, device=self.device)
 
             # L1 loss
             pred_patches = pred_dict[f"Tile_{k}"]
             pseudo_mask = data_dict[f"{k}_Gate"]
-            background_mask = (1 - pseudo_mask)
-            loss_suppression = (pred_patches * background_mask).abs().mean()
+            if valid_mask.sum() > 0:
+                valid_pred_patches = pred_patches[valid_mask]
+                valid_pseudo_mask = pseudo_mask[valid_mask]
+                is_background = (valid_pseudo_mask == 0).float()
+                masked_preds = valid_pred_patches * is_background
+                num_background_pixels = is_background.sum()
+                if num_background_pixels > 0:
+                    loss_suppression = masked_preds.abs().sum() / num_background_pixels
+                else:
+                    loss_suppression = torch.tensor(0.0, device=self.device)
 
-            total_loss += 100 * loss_suppression
+            else:
+                loss_suppression = torch.tensor(0.0, device=self.device)
+            loss_dict["l1 loss"] = loss_suppression
+            total_loss += 1000 * loss_suppression
 
         if self.predict_height:
             height_key = "Height_Ave_cm"
