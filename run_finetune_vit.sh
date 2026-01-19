@@ -17,4 +17,4 @@ python finetune_vit.py \
     --data_folder "data/CSIRO" \
     --mode "single-fold" \
     --stage2_start_epoch 5 \
-    #--predict_height
+    --predict_height
