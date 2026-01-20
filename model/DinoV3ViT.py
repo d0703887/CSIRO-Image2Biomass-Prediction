@@ -47,9 +47,9 @@ class DinoV3ViT(nn.Module):
             raise ValueError(f"Unsupported Training Mode: {self.training_mode}")
 
         # Biomass head
-        # self.green_mlp = MLP(self.embed_dim * 2 if not self.predict_height else self.embed_dim * 2 + hidden_dim, hidden_dim, mode="biomass", dropout=0.6)
-        # self.clover_mlp = MLP(self.embed_dim * 2 if not self.predict_height else self.embed_dim * 2 + hidden_dim, hidden_dim, mode="biomass", dropout=0.6)
-        # self.dead_mlp = MLP(self.embed_dim * 2 if not self.predict_height else self.embed_dim * 2 + hidden_dim, hidden_dim, mode="biomass", dropout=0.6)
+        self.green_mlp = MLP(self.embed_dim * 2 if not self.predict_height else self.embed_dim * 2 + hidden_dim, hidden_dim, mode="biomass", dropout=0.6)
+        self.clover_mlp = MLP(self.embed_dim * 2 if not self.predict_height else self.embed_dim * 2 + hidden_dim, hidden_dim, mode="biomass", dropout=0.6)
+        self.dead_mlp = MLP(self.embed_dim * 2 if not self.predict_height else self.embed_dim * 2 + hidden_dim, hidden_dim, mode="biomass", dropout=0.6)
 
         # Occlusion head
         self.green_occlusion_mlp = MLP(self.embed_dim if not self.predict_height else self.embed_dim + hidden_dim, hidden_dim, mode="biomass", dropout=0.6)
@@ -90,25 +90,25 @@ class DinoV3ViT(nn.Module):
         :return: preds
         """
         vit_out = self.backbone(x)
-        # patch_feature = vit_out.last_hidden_state[:, 5:, :] # (B * 2, num_patch, embed_dim)
+        patch_feature = vit_out.last_hidden_state[:, 5:, :] # (B * 2, num_patch, embed_dim)
         global_feature = vit_out.pooler_output  # (B * 2, embed_dim)
-        # expanded_global_feature = global_feature.unsqueeze(1).expand(-1, patch_feature.shape[1], -1)
+        expanded_global_feature = global_feature.unsqueeze(1).expand(-1, patch_feature.shape[1], -1)
         if not self.predict_height:
-            # patch_fused_feature = torch.cat([patch_feature, expanded_global_feature], dim=-1)
+            patch_fused_feature = torch.cat([patch_feature, expanded_global_feature], dim=-1)
             occlusion_fused_feature = global_feature
         else:
             height_embed = self.height_encoder(global_feature)
             pred_height = self.height_head(height_embed).squeeze(-1)
 
-            # expanded_height_feature = height_embed.unsqueeze(1).expand(-1, patch_feature.shape[1], -1)
-            # patch_fused_feature = torch.cat([patch_feature, expanded_global_feature, expanded_height_feature], dim=-1)
+            expanded_height_feature = height_embed.unsqueeze(1).expand(-1, patch_feature.shape[1], -1)
+            patch_fused_feature = torch.cat([patch_feature, expanded_global_feature, expanded_height_feature], dim=-1)
 
             occlusion_fused_feature = torch.cat([global_feature, height_embed], dim=-1)
 
         # Biomass prediction
-        # raw_green= self.green_mlp(patch_fused_feature)
-        # raw_clover = self.clover_mlp(patch_fused_feature)
-        # raw_dead = self.dead_mlp(patch_fused_feature)
+        raw_green= self.green_mlp(patch_fused_feature)
+        raw_clover = self.clover_mlp(patch_fused_feature)
+        raw_dead = self.dead_mlp(patch_fused_feature)
         raw_green_occlusion = self.green_occlusion_mlp(occlusion_fused_feature).squeeze(-1)
         raw_clover_occlusion = self.clover_occlusion_mlp(occlusion_fused_feature).squeeze(-1)
         raw_dead_occlusion = self.dead_occlusion_mlp(occlusion_fused_feature).squeeze(-1)
@@ -124,9 +124,9 @@ class DinoV3ViT(nn.Module):
         # raw_dead *= dead_gate
 
         # Aggregation
-        pred_green = raw_green_occlusion
-        pred_clover = raw_clover_occlusion
-        pred_dead = raw_dead_occlusion
+        pred_green = self.aggregate_biomass(raw_green) + raw_green_occlusion
+        pred_clover = self.aggregate_biomass(raw_clover) + raw_clover_occlusion
+        pred_dead = self.aggregate_biomass(raw_dead) + raw_dead_occlusion
 
         pred_dict = {
             "Dry_Green_g": pred_green,
@@ -139,12 +139,12 @@ class DinoV3ViT(nn.Module):
         if self.predict_height:
             pred_dict["Height_Ave_cm"] = pred_height
 
-        # if return_patch_preds:
-        #     pred_dict.update({
-        #         "Tile_Dry_Green_g": raw_green,
-        #         "Tile_Dry_Clover_g": raw_clover,
-        #         "Tile_Dry_Dead_g": raw_dead
-        #     })
+        if return_patch_preds:
+            pred_dict.update({
+                "Tile_Dry_Green_g": raw_green,
+                "Tile_Dry_Clover_g": raw_clover,
+                "Tile_Dry_Dead_g": raw_dead
+            })
 
         # if return_gates:
         #     pred_dict.update({

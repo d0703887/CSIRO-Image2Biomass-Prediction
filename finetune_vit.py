@@ -171,10 +171,7 @@ class Trainer:
                 # If all images in this batch are 'bad', loss is 0 for this trait
                 loss_dict[k] = torch.tensor(0.0, device=self.device)
 
-            # L1 loss (Skip dead)
-            if k == "Dry_Dead_g":
-                continue
-
+            # L1 loss
             pred_patches = pred_dict[f"Tile_{k}"]
             pseudo_mask = data_dict[f"{k}_Gate"]
             if valid_mask.sum() > 0:
@@ -445,7 +442,7 @@ class Trainer:
             log.update(self._prefix_metrics(val_metrics, "val"))
 
             # Save model
-            cur_r2 = val_metrics["Dry_Green_g_r2"]
+            cur_r2 = val_metrics["Dry_Dead_g_r2"]
             if cur_r2 > best_val_r2:
                 log.update(self._prefix_metrics(train_pred_tables, "Train_Pred"))
                 log.update(self._prefix_metrics(val_pred_tables, "val_Pred"))
