@@ -191,7 +191,7 @@ class Trainer:
             else:
                 loss_suppression = torch.tensor(0.0, device=self.device)
             loss_dict["l1 loss"] = loss_suppression
-            total_loss += 3000 * loss_suppression
+            total_loss += 1000 * loss_suppression
 
         if self.predict_height:
             height_key = "Height_Ave_cm"
