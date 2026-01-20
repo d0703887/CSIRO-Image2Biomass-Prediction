@@ -442,7 +442,7 @@ class Trainer:
             log.update(self._prefix_metrics(val_metrics, "val"))
 
             # Save model
-            cur_r2 = val_metrics["r2"]
+            cur_r2 = val_metrics["Dry_Green_g_r2"]
             if cur_r2 > best_val_r2:
                 log.update(self._prefix_metrics(train_pred_tables, "Train_Pred"))
                 log.update(self._prefix_metrics(val_pred_tables, "val_Pred"))
@@ -544,7 +544,7 @@ def main(config, mode: str):
     if mode == "cross-validation":
         trainer.cross_validation()
     elif mode == "single-fold":
-        trainer.train_one_fold(0)
+        trainer.train_one_fold(1)
     else:
         raise RuntimeError(f"Unsupported mode: {mode}")
 
