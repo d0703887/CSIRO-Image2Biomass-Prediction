@@ -57,9 +57,9 @@ class DinoV3ViT(nn.Module):
         self.dead_occlusion_mlp = MLP(self.embed_dim if not self.predict_height else self.embed_dim + hidden_dim, hidden_dim, mode="biomass", dropout=0.6)
 
         # Gate
-        self.green_gate = MLP(self.embed_dim, hidden_dim // 2, mode="gate", dropout=0.6)
-        self.clover_gate = MLP(self.embed_dim, hidden_dim // 2, mode="gate", dropout=0.6)
-        self.dead_gate = MLP(self.embed_dim, hidden_dim // 2, mode="gate", dropout=0.6)
+        # self.green_gate = MLP(self.embed_dim * 2, hidden_dim // 2, mode="gate", dropout=0.6)
+        # self.clover_gate = MLP(self.embed_dim * 2, hidden_dim // 2, mode="gate", dropout=0.6)
+        # self.dead_gate = MLP(self.embed_dim * 2, hidden_dim // 2, mode="gate", dropout=0.6)
 
         # Auxiliary height prediction
         if self.predict_height:
@@ -114,14 +114,14 @@ class DinoV3ViT(nn.Module):
         raw_dead_occlusion = self.dead_occlusion_mlp(occlusion_fused_feature).squeeze(-1)
 
         # Gate
-        green_gate = self.green_gate(patch_feature)
-        clover_gate = self.clover_gate(patch_feature)
-        dead_gate = self.dead_gate(patch_feature)
+        # green_gate = self.green_gate(patch_fused_feature)
+        # clover_gate = self.clover_gate(patch_fused_feature)
+        # dead_gate = self.dead_gate(patch_fused_feature)
 
         # Apply gating
-        raw_green *= green_gate
-        raw_clover *= clover_gate
-        raw_dead *= dead_gate
+        # raw_green *= green_gate
+        # raw_clover *= clover_gate
+        # raw_dead *= dead_gate
 
         # Aggregation
         pred_green = self.aggregate_biomass(raw_green) + raw_green_occlusion
