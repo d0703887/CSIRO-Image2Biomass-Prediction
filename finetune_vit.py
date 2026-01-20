@@ -70,8 +70,8 @@ class Trainer:
         self.data_folder = config["data_folder"]
         self.wandb_mode = config["wandb_mode"]
 
-        #self.regression_loss_fn = nn.HuberLoss(delta=8)
-        self.regression_loss_fn = nn.MSELoss()
+        self.regression_loss_fn = nn.HuberLoss(delta=10)
+        #self.regression_loss_fn = nn.MSELoss()
         self.bce_loss_fn = nn.BCELoss()
         self.r2_coeff = {
             "Dry_Green_g": 0.1,
@@ -544,7 +544,7 @@ def main(config, mode: str):
     if mode == "cross-validation":
         trainer.cross_validation()
     elif mode == "single-fold":
-        trainer.train_one_fold(1)
+        trainer.train_one_fold(config["fold_idx"])
     else:
         raise RuntimeError(f"Unsupported mode: {mode}")
 
@@ -571,6 +571,7 @@ if __name__ == '__main__':
     parser.add_argument("--wandb_mode", type=str, default="online")
     parser.add_argument("--data_folder", type=str, default="data")
     parser.add_argument("--mode", type=str, default="single-fold")
+    parser.add_argument("--fold_idx", type=int, default=0)
     args = parser.parse_args()
 
     # Validating loss coefficient
@@ -606,7 +607,8 @@ if __name__ == '__main__':
         "input_h": args.input_h,
         "input_w": args.input_w,
         "data_folder": args.data_folder,
-        "wandb_mode": args.wandb_mode
+        "wandb_mode": args.wandb_mode,
+        "fold_idx": args.fold_idx
     }
     main(config, args.mode)
 
