@@ -32,9 +32,10 @@ class MLP(nn.Module):
             nn.init.normal_(self.mlp[-1].weight, mean=0.0, std=1e-5)
             nn.init.constant_(self.mlp[-1].bias, -0.6)
 
+        # if mode == "gate":
+        #     nn.init.normal_(self.mlp[-1].weight, mean=0.0, std=1e-5)
+        #     nn.init.constant_(self.mlp[-1].bias, 2)
+
     def forward(self, x):
         logits = self.mlp(x)
-        if self.mode == "gate":
-            return self.final_act(logits)
-        else:
-            return self.final_act(logits)
+        return self.final_act(logits)

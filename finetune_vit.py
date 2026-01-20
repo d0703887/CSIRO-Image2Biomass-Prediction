@@ -188,7 +188,7 @@ class Trainer:
             else:
                 loss_suppression = torch.tensor(0.0, device=self.device)
             loss_dict["l1 loss"] = loss_suppression
-            total_loss += 1000 * loss_suppression
+            total_loss += 3000 * loss_suppression
 
         if self.predict_height:
             height_key = "Height_Ave_cm"
@@ -442,7 +442,7 @@ class Trainer:
             log.update(self._prefix_metrics(val_metrics, "val"))
 
             # Save model
-            cur_r2 = val_metrics["Dry_Dead_g_r2"]
+            cur_r2 = val_metrics["r2"]
             if cur_r2 > best_val_r2:
                 log.update(self._prefix_metrics(train_pred_tables, "Train_Pred"))
                 log.update(self._prefix_metrics(val_pred_tables, "val_Pred"))
