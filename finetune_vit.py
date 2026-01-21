@@ -70,8 +70,8 @@ class Trainer:
         self.data_folder = config["data_folder"]
         self.wandb_mode = config["wandb_mode"]
 
-        self.regression_loss_fn = nn.HuberLoss(delta=10)
-        #self.regression_loss_fn = nn.MSELoss()
+        #self.regression_loss_fn = nn.HuberLoss(delta=10)
+        self.regression_loss_fn = nn.MSELoss()
         self.bce_loss_fn = nn.BCELoss()
         self.r2_coeff = {
             "Dry_Green_g": 0.1,
@@ -172,23 +172,24 @@ class Trainer:
                 loss_dict[k] = torch.tensor(0.0, device=self.device)
 
             # L1 loss
-            # pred_patches = pred_dict[f"Tile_{k}"]
-            # pseudo_mask = data_dict[f"{k}_Gate"]
-            # if valid_mask.sum() > 0:
-            #     valid_pred_patches = pred_patches[valid_mask]
-            #     valid_pseudo_mask = pseudo_mask[valid_mask]
-            #     is_background = (valid_pseudo_mask == 0).float()
-            #     masked_preds = valid_pred_patches * is_background
-            #     num_background_pixels = is_background.sum()
-            #     if num_background_pixels > 0:
-            #         loss_suppression = masked_preds.abs().sum() / num_background_pixels
-            #     else:
-            #         loss_suppression = torch.tensor(0.0, device=self.device)
-            #
-            # else:
-            #     loss_suppression = torch.tensor(0.0, device=self.device)
-            # loss_dict["l1 loss"] = loss_suppression
-            # total_loss += 3000 * self.loss_coefficient[k] * loss_suppression
+            pred_patches = pred_dict[f"Tile_{k}"]
+            pseudo_mask = data_dict[f"{k}_Gate"]
+            if valid_mask.sum() > 0:
+                valid_pred_patches = pred_patches[valid_mask]
+                valid_pseudo_mask = pseudo_mask[valid_mask]
+                is_background = (valid_pseudo_mask == 0).float()
+                masked_preds = valid_pred_patches * is_background  # (num_valid, 48, 96)
+                num_background_pixels = is_background.sum()
+                if num_background_pixels > 0:
+                    #loss_suppression = masked_preds.abs().sum() / num_background_pixels
+                    loss_suppression = masked_preds.abs().sum(dim=(1, 2)).mean()
+                else:
+                    loss_suppression = torch.tensor(0.0, device=self.device)
+
+            else:
+                loss_suppression = torch.tensor(0.0, device=self.device)
+            loss_dict[f"{k} l1 loss"] = loss_suppression
+            total_loss += loss_suppression * 5
 
         if self.predict_height:
             height_key = "Height_Ave_cm"
@@ -353,9 +354,8 @@ class Trainer:
     def train_one_fold(self, fold_idx: int):
         wandb_run = self._initialize_wandb(fold_idx)
         train_dataloader, val_dataloader = self._initialize_data(fold_idx)
-        #val_global_mean = self._compute_global_mean(val_dataloader.dataset)
+        val_global_mean = self._compute_global_mean(val_dataloader.dataset)
         train_global_mean = self._compute_global_mean(train_dataloader.dataset)
-        val_global_mean = train_global_mean
 
         model = self._initialize_model()
         model.to(self.device)
