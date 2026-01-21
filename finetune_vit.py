@@ -172,23 +172,23 @@ class Trainer:
                 loss_dict[k] = torch.tensor(0.0, device=self.device)
 
             # L1 loss
-            pred_patches = pred_dict[f"Tile_{k}"]
-            pseudo_mask = data_dict[f"{k}_Gate"]
-            if valid_mask.sum() > 0:
-                valid_pred_patches = pred_patches[valid_mask]
-                valid_pseudo_mask = pseudo_mask[valid_mask]
-                is_background = (valid_pseudo_mask == 0).float()
-                masked_preds = valid_pred_patches * is_background
-                num_background_pixels = is_background.sum()
-                if num_background_pixels > 0:
-                    loss_suppression = masked_preds.abs().sum() / num_background_pixels
-                else:
-                    loss_suppression = torch.tensor(0.0, device=self.device)
-
-            else:
-                loss_suppression = torch.tensor(0.0, device=self.device)
-            loss_dict["l1 loss"] = loss_suppression
-            total_loss += 3000 * self.loss_coefficient[k] * loss_suppression
+            # pred_patches = pred_dict[f"Tile_{k}"]
+            # pseudo_mask = data_dict[f"{k}_Gate"]
+            # if valid_mask.sum() > 0:
+            #     valid_pred_patches = pred_patches[valid_mask]
+            #     valid_pseudo_mask = pseudo_mask[valid_mask]
+            #     is_background = (valid_pseudo_mask == 0).float()
+            #     masked_preds = valid_pred_patches * is_background
+            #     num_background_pixels = is_background.sum()
+            #     if num_background_pixels > 0:
+            #         loss_suppression = masked_preds.abs().sum() / num_background_pixels
+            #     else:
+            #         loss_suppression = torch.tensor(0.0, device=self.device)
+            #
+            # else:
+            #     loss_suppression = torch.tensor(0.0, device=self.device)
+            # loss_dict["l1 loss"] = loss_suppression
+            # total_loss += 3000 * self.loss_coefficient[k] * loss_suppression
 
         if self.predict_height:
             height_key = "Height_Ave_cm"
@@ -353,8 +353,9 @@ class Trainer:
     def train_one_fold(self, fold_idx: int):
         wandb_run = self._initialize_wandb(fold_idx)
         train_dataloader, val_dataloader = self._initialize_data(fold_idx)
-        val_global_mean = self._compute_global_mean(val_dataloader.dataset)
+        #val_global_mean = self._compute_global_mean(val_dataloader.dataset)
         train_global_mean = self._compute_global_mean(train_dataloader.dataset)
+        val_global_mean = train_global_mean
 
         model = self._initialize_model()
         model.to(self.device)
@@ -442,10 +443,10 @@ class Trainer:
             log.update(self._prefix_metrics(val_metrics, "val"))
 
             # Save model
-            cur_r2 = val_metrics["Dry_Green_g_r2"]
+            cur_r2 = val_metrics["r2"]
             if cur_r2 > best_val_r2:
-                log.update(self._prefix_metrics(train_pred_tables, "Train_Pred"))
-                log.update(self._prefix_metrics(val_pred_tables, "val_Pred"))
+                # log.update(self._prefix_metrics(train_pred_tables, "Train_Pred"))
+                # log.update(self._prefix_metrics(val_pred_tables, "val_Pred"))
 
                 best_val_r2 = cur_r2
                 torch.save(model.state_dict(), os.path.join(wandb_run.dir, f"{fold_idx}_best_model_{best_val_r2:.3f}.pth"))
