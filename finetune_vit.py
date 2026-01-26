@@ -56,6 +56,7 @@ class Trainer:
         self.weight_decay = config["weight_decay"]
         self.stage2_start_epoch = config["stage2_start_epoch"]
         self.accumulation_steps = config["accumulation_steps"]
+        self.scaler = torch.amp.GradScaler('cuda')
 
         # Model config
         self.gating = config["gating"]
@@ -70,7 +71,7 @@ class Trainer:
         self.data_folder = config["data_folder"]
         self.wandb_mode = config["wandb_mode"]
 
-        #self.regression_loss_fn = nn.HuberLoss(delta=10)
+        #self.regression_loss_fn = nn.HuberLoss(delta=5)
         self.regression_loss_fn = nn.MSELoss()
         self.bce_loss_fn = nn.BCELoss()
         self.r2_coeff = {
@@ -159,11 +160,12 @@ class Trainer:
             target = data_dict[k]
             pred = pred_dict[k]
             valid_mask = (target != -1)
+            num_valid = valid_mask.sum()
 
             # Regression loss
             valid_pred = pred[valid_mask]
             valid_target = target[valid_mask]
-            if valid_mask.sum() > 0:
+            if num_valid > 0:
                 loss = self.regression_loss_fn(valid_pred, valid_target)
                 loss_dict[k] = loss
                 total_loss += loss * self.loss_coefficient[k]
@@ -172,24 +174,25 @@ class Trainer:
                 loss_dict[k] = torch.tensor(0.0, device=self.device)
 
             # L1 loss
-            pred_patches = pred_dict[f"Tile_{k}"]
-            pseudo_mask = data_dict[f"{k}_Gate"]
-            if valid_mask.sum() > 0:
-                valid_pred_patches = pred_patches[valid_mask]
-                valid_pseudo_mask = pseudo_mask[valid_mask]
-                is_background = (valid_pseudo_mask == 0).float()
-                masked_preds = valid_pred_patches * is_background  # (num_valid, 48, 96)
-                num_background_pixels = is_background.sum()
-                if num_background_pixels > 0:
-                    #loss_suppression = masked_preds.abs().sum() / num_background_pixels
-                    loss_suppression = masked_preds.abs().sum(dim=(1, 2)).mean()
-                else:
-                    loss_suppression = torch.tensor(0.0, device=self.device)
+            # pred_patches = pred_dict[f"Tile_{k}"] # if split: (b * 2, 48, 48), else (b, 48, 96)
+            # pseudo_mask = data_dict[f"{k}_Gate"]  # if split: (b, 2, 48 * 48), else (b, 48, 96)
+            # if num_valid > 0:
+            #     if self.split_img:
+            #         pred_patches = pred_patches.view(-1, 2, 48 * 48)
+            #     valid_pred_patches = pred_patches[valid_mask]
+            #     valid_pseudo_mask = pseudo_mask[valid_mask]
+            #     suppression_loss = (valid_pred_patches * (valid_pseudo_mask == 0).float()).abs().sum(dim=(1, 2)).mean()
+            # else:
+            #     suppression_loss = torch.tensor(0.0, device=self.device)
+            #
+            # loss_dict[f"{k} l1 loss"] = suppression_loss
+            # total_loss += suppression_loss
 
-            else:
-                loss_suppression = torch.tensor(0.0, device=self.device)
-            loss_dict[f"{k} l1 loss"] = loss_suppression
-            total_loss += loss_suppression * 5
+            # Negative loss
+            pred_patches = pred_dict[f"Tile_{k}"]
+            negative_loss = F.relu(-pred_patches).sum(dim=(1, 2)).mean()
+            loss_dict["Negative loss"] = loss_dict.get("Negative loss", 0.0) + negative_loss
+            total_loss += negative_loss
 
         if self.predict_height:
             height_key = "Height_Ave_cm"
@@ -216,13 +219,14 @@ class Trainer:
         optimizer.zero_grad()
 
         for i, data_dict in enumerate(data_pbar):
-            loss_dict, preds = self.process_batch(model, data_dict, epoch)
-
-            loss = loss_dict["main_loss"] / self.accumulation_steps
-            loss.backward()
+            with torch.amp.autocast('cuda'):
+                loss_dict, preds = self.process_batch(model, data_dict, epoch)
+                loss = loss_dict["main_loss"] / self.accumulation_steps
+            self.scaler.scale(loss).backward()
 
             if (i + 1) % self.accumulation_steps == 0 or (i + 1) == len(train_dataloader):
-                optimizer.step()
+                self.scaler.step(optimizer)
+                self.scaler.update()
                 optimizer.zero_grad()
 
             data_pbar.set_postfix({"loss": loss_dict["main_loss"].item()})
@@ -385,7 +389,7 @@ class Trainer:
                 backbone_params = [p for n, p in model.named_parameters() if "backbone" in n]
                 head_params = [p for n, p in model.named_parameters() if "backbone" not in n]
 
-                stage2_head_lr = self.lr * 0.1  # e.g., 1e-5
+                stage2_head_lr = 1e-5  # e.g., 1e-5
                 stage2_backbone_lr = stage2_head_lr  # e.g., 1e-6 (Critical!)
 
                 optimizer = torch.optim.AdamW([
@@ -457,6 +461,72 @@ class Trainer:
 
         wandb_run.finish()
         return best_val_r2
+
+    def train_all_data(self):
+        wandb_run = wandb.init(
+            entity="d0703887",
+            project="CSIRO",
+            name=f"{self.timestamp}_ViT_FINAL_ALL_DATA",
+            config=self.config,
+            mode=self.wandb_mode,
+            dir=self.project_dir
+        )
+
+        train_dataloader = DataLoader(
+            CSIRODataset(self.data_folder, self.df, self.input_H, self.input_W, self.split_img, True),
+            batch_size=self.batch_size,
+            shuffle=True,
+            num_workers=4,
+            pin_memory=True
+        )
+
+        model = self._initialize_model()
+        model.to(self.device)
+        optimizer = torch.optim.AdamW(model.parameters(), lr=self.lr, weight_decay=self.weight_decay)
+
+        # Global mean for R2 tracking (even if just training)
+        train_global_mean = self._compute_global_mean(train_dataloader.dataset)
+
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer,
+            T_max=self.stage2_start_epoch if self.training_mode == "full_finetune" else self.epochs,
+            eta_min=1e-5
+        )
+
+        print(f"Starting Final Training on ALL data: {len(self.df)} samples.")
+
+        for epoch in range(1, self.epochs + 1):
+            # Handle Two-Stage freezing logic (copied from train_one_fold)
+            if self.training_mode == "full_finetune":
+                if epoch == 1:
+                    for param in model.backbone.parameters(): param.requires_grad = False
+                elif epoch == self.stage2_start_epoch + 1:
+                    for param in model.backbone.parameters(): param.requires_grad = True
+                    # Re-init optimizer for stage 2
+                    optimizer = torch.optim.AdamW([
+                        {'params': [p for n, p in model.named_parameters() if "backbone" in n], 'lr': 1e-5},
+                        {'params': [p for n, p in model.named_parameters() if "backbone" not in n], 'lr': 1e-5}
+                    ], weight_decay=self.weight_decay)
+                    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=self.epochs - epoch + 1,
+                                                                           eta_min=1e-6)
+
+            # Train for one epoch
+            train_metrics, _ = self.train_one_epoch(model, optimizer, train_dataloader, epoch, train_global_mean)
+
+            if scheduler:
+                scheduler.step()
+
+            # Logging
+            log = {"lr": optimizer.param_groups[0]["lr"]}
+            log.update(self._prefix_metrics(train_metrics, "train_all"))
+            wandb_run.log(log, step=epoch)
+
+            print(f"Epoch {epoch} | Loss: {train_metrics['main_loss']:.4f} | R2: {train_metrics['r2']:.4f}")
+
+            torch.save(model.state_dict(), f"{epoch}.pth")
+
+        wandb_run.finish()
+
 
     def cross_validation(self):
         val_r2s = []
@@ -546,6 +616,8 @@ def main(config, mode: str):
         trainer.cross_validation()
     elif mode == "single-fold":
         trainer.train_one_fold(config["fold_idx"])
+    elif mode == "train-all":
+        trainer.train_all_data()
     else:
         raise RuntimeError(f"Unsupported mode: {mode}")
 

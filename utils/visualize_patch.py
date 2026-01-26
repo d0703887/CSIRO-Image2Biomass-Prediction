@@ -6,7 +6,7 @@ from torchvision.io import read_image
 import numpy as np
 
 # 1. Setup constants based on your description
-IMG_SIZE = (512, 512)  # The size you resize to
+IMG_SIZE = (1024, 1024)  # The size you resize to
 PATCH_SIZE = 16  # The patch size for the ViT/DinoV3
 
 
@@ -26,7 +26,7 @@ def visualize_patch_scale(image_path):
 
     # --- Step A: Split Image (Logic from CSIRODataset) ---
     _, _, w = img.shape
-    center = w // 2
+    center = w // 2 + int(w * 0.1)
     # We only need to visualize one half (e.g., Left) to see the scale
     left_img = img[:, :, :center]
 
@@ -73,6 +73,7 @@ def visualize_patch_scale(image_path):
     ax.legend(loc='upper right')
     plt.axis('off')
     plt.show()
+    fig.savefig('overlap.png')
 
 if __name__ == '__main__':
     # --- Run the visualization ---

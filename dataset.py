@@ -1,5 +1,5 @@
 import pandas as pd
-import os
+import os, random
 
 import torch
 from torch.utils.data import Dataset
@@ -22,19 +22,6 @@ class CSIRODataset(Dataset):
         self.is_train = is_train
         self.input_h = input_h
         self.input_w = input_w
-
-
-        self.geometric_transform = v2.Compose([
-            v2.RandomHorizontalFlip(p=0.5),
-            v2.RandomVerticalFlip(p=0.5),
-            v2.RandomChoice([
-                v2.Identity(),
-                v2.RandomRotation(degrees=(90, 90), expand=False),
-                v2.RandomRotation(degrees=(180, 180), expand=False),
-                v2.RandomRotation(degrees=(270, 270), expand=False)
-            ]),
-        ])
-
         self.resize = v2.Resize((input_h, input_w), antialias=True)
 
         # self.color_transform = v2.Compose([
@@ -59,34 +46,56 @@ class CSIRODataset(Dataset):
         ]].to_dict('records')
 
         self.bad_images = {
-            "Dry_Green_g": [
-                "ID1139918758.jpg",
-                "ID1337107565.jpg",
-                "ID1403107574.jpg",
-                "ID1761544403.jpg",
-                "ID40849327.jpg",
-                "ID473494649.jpg",
-                "ID681680726.jpg",
-                "ID697718693.jpg",
-            ],
-            "Dry_Clover_g": [
+            "Dry_Green_g": {
+                "ID1139918758.jpg", "ID1337107565.jpg", "ID1403107574.jpg",
+                "ID1761544403.jpg", "ID40849327.jpg", "ID473494649.jpg",
+                "ID681680726.jpg", "ID697718693.jpg",
+            },
+            "Dry_Clover_g": {
                 "ID1403107574.jpg"
-            ],
-            "Dry_Dead_g": [
-                "ID473494649.jpg",
-                "ID661372352.jpg",
-                "ID1403107574.jpg",
-                "ID1444674500.jpg",
-                "ID1761544403.jpg",
-                "ID230058600.jpg"
-            ]
+            },
+            "Dry_Dead_g": {
+                "ID473494649.jpg", "ID661372352.jpg", "ID1403107574.jpg",
+                "ID1444674500.jpg", "ID1761544403.jpg", "ID230058600.jpg"
+            }
         }
 
     def __len__(self):
         return len(self.df)
 
+    def geometric_transform(self, image, mask):
+        if random.random() > 0.5:
+            image = v2.functional.horizontal_flip(image)
+            mask = v2.functional.horizontal_flip(mask)
+
+        if random.random() > 0.5:
+            image = v2.functional.vertical_flip(image)
+            mask = v2.functional.vertical_flip(mask)
+
+        if self.split_img:
+            rand = random.random()
+            if 0.25 <= rand < 0.5:
+                angle = 90
+            elif 0.5 <= rand < 0.75:
+                angle = 180
+            elif 0.75 <= rand < 1:
+                angle = 270
+            else:
+                angle = 0
+        else:
+            rand = random.random()
+            if 0.5 <= rand < 1:
+                angle = 180
+            else:
+                angle = 0
+
+        image = v2.functional.rotate(image, angle)
+        mask = v2.functional.rotate(mask, angle)
+
+        return image, mask
+
     def split_left_and_right(self, image):
-        _, _, w = image.shape
+        w = image.shape[-1]
         center = w // 2
         left_img = image[:, :, :center]
         right_img = image[:, :, center:]
@@ -99,49 +108,68 @@ class CSIRODataset(Dataset):
 
         gate_names = ["green", "clover", "dead"]
         masks = []
-
         for name in gate_names:
-            path = os.path.join(self.data_folder, f"pseudo_gates/{name}", img_basename)
-            if os.path.exists(path):
-                # Read, convert to binary 0/1 float, ensure 1 channel
-                m = (read_image(path) > 0).float()
-            else:
-                # Create empty mask with same H,W as image
-                m = -torch.ones((1, 48, 96), dtype=torch.float32)
+            path = os.path.join(self.data_folder, f"pseudo_gates/{name}", img_basename.replace("jpg", "png"))
+            # if os.path.exists(path):
+            #     m = read_image(path).float()
+            # else:
+            #     m = -torch.ones((1, 48, 96), dtype=torch.float32)
+            m = read_image(path).float()
             masks.append(m)
-
         mask_tensor = torch.cat(masks, dim=0)
 
         if self.split_img:
             left_img, right_img = self.split_left_and_right(img)
-            if self.transform:
-                left_img = self.transform(left_img)
-                right_img = self.transform(right_img)
-            input_img = torch.cat([left_img, right_img]) # (2, C, H, W)
+            left_mask, right_mask = self.split_left_and_right(mask_tensor)
+            if self.is_train:
+                left_img, left_mask = self.geometric_transform(left_img, left_mask)
+                right_img, right_mask = self.geometric_transform(right_img, right_mask)
+
+            left_img = self.resize(left_img)
+            right_img = self.resize(right_img)
+            left_img = self.normalize_transform(left_img)
+            right_img = self.normalize_transform(right_img)
+
+            input_img = torch.cat([left_img, right_img]) # (2 * C, H, W)
+            mask_tensor = torch.cat([left_mask, right_mask]) # (2 * 3, H, W)
+
         else:
-            img = v2.ToImage()(img)
             if self.is_train:
                 img, mask_tensor = self.geometric_transform(img, mask_tensor)
                 img = self.resize(img)
-                #img = self.color_transform(img)
-            else:
-                img = self.resize(img)
 
+            img = self.resize(img)
             img = self.normalize_transform(img)
             input_img = img
 
         row = self.data_values[idx]
+
+        def get_val(key, default=-1.0):
+            if img_basename in self.bad_images.get(key, set()):
+                return torch.tensor(default, dtype=torch.float32)
+            return torch.tensor(row[key], dtype=torch.float32)
+
+        def prepare_gate(start_idx):
+            sliced_mask = mask_tensor[start_idx::3]
+            if self.split_img:
+                return sliced_mask.view(2, (self.input_h // 16) * (self.input_w // 16))
+            else:
+                return sliced_mask.view((self.input_h // 16) * (self.input_w // 16), 1)
+
         data_dict =  {
             "Input_Img": input_img,
             "Height_Ave_cm": torch.tensor(row["Height_Ave_cm"], dtype=torch.float32),
-            "Dry_Green_g": torch.tensor(row["Dry_Green_g"], dtype=torch.float32) if img_basename not in self.bad_images["Dry_Green_g"] else torch.tensor(-1, dtype=torch.float32),
-            "Dry_Clover_g": torch.tensor(row["Dry_Clover_g"], dtype=torch.float32) if img_basename not in self.bad_images["Dry_Clover_g"] else torch.tensor(-1, dtype=torch.float32),
-            "Dry_Dead_g": torch.tensor(row["Dry_Dead_g"], dtype=torch.float32) if img_basename not in self.bad_images["Dry_Dead_g"] else torch.tensor(-1, dtype=torch.float32),
             "Dry_Total_g": torch.tensor(row["Dry_Total_g"], dtype=torch.float32),
-            "Dry_Green_g_Gate": mask_tensor[0].view(96 * 48, 1),
-            "Dry_Clover_g_Gate": mask_tensor[1].view(96 * 48, 1),
-            "Dry_Dead_g_Gate": mask_tensor[2].view(96 * 48, 1),
             "GDM_g": torch.tensor(row["GDM_g"], dtype=torch.float32),
+
+            "Dry_Green_g": get_val("Dry_Green_g"),
+            "Dry_Clover_g": get_val("Dry_Clover_g"),
+            "Dry_Dead_g": get_val("Dry_Dead_g"),
+
+            "Dry_Green_g_Gate": torch.tensor(0), #prepare_gate(0),
+            "Dry_Clover_g_Gate": torch.tensor(0), #prepare_gate(1),
+            "Dry_Dead_g_Gate": torch.tensor(0), #prepare_gate(2),
+
             "image_path": img_path,
             "species": self.species[idx]
         }
@@ -263,4 +291,5 @@ class CombinedExternalDataset(Dataset):
             "Dry_Green_g": torch.tensor(row["Dry_Green_g"], dtype=torch.float32),
             "Dry_Clover_g": torch.tensor(row["Dry_Clover_g"], dtype=torch.float32),
         }
+
 

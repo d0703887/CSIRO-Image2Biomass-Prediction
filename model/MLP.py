@@ -12,7 +12,8 @@ class MLP(nn.Module):
         super().__init__()
         self.mode = mode
         if mode == "biomass":
-            self.final_act = nn.Softplus(beta=5)
+            #self.final_act = nn.Softplus(beta=5)
+            self.final_act = nn.ELU()
         elif mode == "gate":
             self.final_act = nn.Sigmoid()
         elif mode == "height":
@@ -28,9 +29,9 @@ class MLP(nn.Module):
         )
 
         # Initialize the final linear layer to stabilize training
-        if mode == "biomass":
-            nn.init.normal_(self.mlp[-1].weight, mean=0.0, std=1e-5)
-            nn.init.constant_(self.mlp[-1].bias, -0.6)
+        # if mode == "biomass":
+        #     nn.init.normal_(self.mlp[-1].weight, mean=0.0, std=1e-5)
+        #     nn.init.constant_(self.mlp[-1].bias, -0.6)
 
         # if mode == "gate":
         #     nn.init.normal_(self.mlp[-1].weight, mean=0.0, std=1e-5)
