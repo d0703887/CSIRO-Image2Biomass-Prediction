@@ -304,9 +304,9 @@ class Trainer:
             if valid_mask.sum() == 0:
                 r2_scores[f"{target_name}_r2"] = torch.tensor(0.0, device=flat_targets.device)
                 continue
+
             valid_preds = flat_preds[valid_mask]
             valid_targets = flat_targets[valid_mask]
-
             mse = torch.sum((valid_targets - valid_preds) ** 2)
             var = torch.sum((valid_targets - weighted_mean[target_name]) ** 2)
 

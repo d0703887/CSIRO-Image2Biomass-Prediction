@@ -166,9 +166,9 @@ class CSIRODataset(Dataset):
             "Dry_Clover_g": get_val("Dry_Clover_g"),
             "Dry_Dead_g": get_val("Dry_Dead_g"),
 
-            "Dry_Green_g_Gate": torch.tensor(0), #prepare_gate(0),
-            "Dry_Clover_g_Gate": torch.tensor(0), #prepare_gate(1),
-            "Dry_Dead_g_Gate": torch.tensor(0), #prepare_gate(2),
+            "Dry_Green_g_Gate": prepare_gate(0),
+            "Dry_Clover_g_Gate": prepare_gate(1),
+            "Dry_Dead_g_Gate": prepare_gate(2),
 
             "image_path": img_path,
             "species": self.species[idx]
