@@ -174,19 +174,19 @@ class Trainer:
                 loss_dict[k] = torch.tensor(0.0, device=self.device)
 
             # L1 loss
-            # pred_patches = pred_dict[f"Tile_{k}"] # if split: (b * 2, 48, 48), else (b, 48, 96)
-            # pseudo_mask = data_dict[f"{k}_Gate"]  # if split: (b, 2, 48 * 48), else (b, 48, 96)
-            # if num_valid > 0:
-            #     if self.split_img:
-            #         pred_patches = pred_patches.view(-1, 2, 48 * 48)
-            #     valid_pred_patches = pred_patches[valid_mask]
-            #     valid_pseudo_mask = pseudo_mask[valid_mask]
-            #     suppression_loss = (valid_pred_patches * (valid_pseudo_mask == 0).float()).abs().sum(dim=(1, 2)).mean()
-            # else:
-            #     suppression_loss = torch.tensor(0.0, device=self.device)
-            #
-            # loss_dict[f"{k} l1 loss"] = suppression_loss
-            # total_loss += suppression_loss
+            pred_patches = pred_dict[f"Tile_{k}"] # if split: (b * 2, 48, 48), else (b, 48, 96)
+            pseudo_mask = data_dict[f"{k}_Gate"]  # if split: (b, 2, 48 * 48), else (b, 48, 96)
+            if num_valid > 0:
+                if self.split_img:
+                    pred_patches = pred_patches.view(-1, 2, 48 * 48)
+                valid_pred_patches = pred_patches[valid_mask]
+                valid_pseudo_mask = pseudo_mask[valid_mask]
+                suppression_loss = (valid_pred_patches * (valid_pseudo_mask == 0).float()).abs().sum(dim=(1, 2)).mean()
+            else:
+                suppression_loss = torch.tensor(0.0, device=self.device)
+
+            loss_dict[f"{k} l1 loss"] = suppression_loss
+            total_loss += suppression_loss
 
             # Negative loss
             pred_patches = pred_dict[f"Tile_{k}"]

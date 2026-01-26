@@ -11,7 +11,7 @@ python finetune_vit.py \
     --model_name "facebook/dinov3-vitb16-pretrain-lvd1689m" \
     --hidden_dim 64 \
     --training_mode "full_finetune" \
-    --input_h 1024 \
+    --input_h 768 \
     --input_w 2048 \
     --wandb_mode "online" \
     --data_folder "data/CSIRO" \
