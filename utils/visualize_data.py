@@ -100,4 +100,53 @@ def view_biomass_images(data_folder='../data/CSIRO', csv_file='train.csv'):
     plt.show()
 
 if __name__ == "__main__":
-    view_biomass_images()
+    #view_biomass_images()
+
+    import os
+    import re
+
+    folder = "../wandb"
+
+    for run_name in os.listdir(folder):
+        run_path = os.path.join(folder, run_name, "wandb")
+
+        if not os.path.isdir(run_path):
+            continue
+
+        # Find the directory starting with 'run'
+        subdirs = [d for d in os.listdir(run_path) if d.startswith("run")]
+        if not subdirs:
+            continue
+
+        # Path to the actual files
+        files_dir = os.path.join(run_path, subdirs[0], "files")
+        if not os.path.isdir(files_dir):
+            continue
+
+        # 1. Gather all .pth files and their scores
+        pth_files = []
+        for filename in os.listdir(files_dir):
+            if filename.endswith(".pth") and "_best_model_" in filename:
+                try:
+                    # Extract score: assumes "{fold_id}_best_model_{score}.pth"
+                    # This splits by '_' and takes the part before '.pth'
+                    score_str = filename.split("_best_model_")[-1].replace(".pth", "")
+                    score = float(score_str)
+                    pth_files.append((score, filename))
+                except ValueError:
+                    continue
+
+        # 2. Sort files by score descending (highest first)
+        pth_files.sort(key=lambda x: x[0], reverse=True)
+
+        # 3. Identify files to delete (everything after index 2)
+        files_to_delete = pth_files[3:]
+
+        # 4. Execute deletion
+        for score, filename in files_to_delete:
+            file_to_remove = os.path.join(files_dir, filename)
+            os.remove(file_to_remove)
+            print(f"Deleted {filename} from {run_name} (Score: {score})")
+
+    print("Cleanup complete.")
+

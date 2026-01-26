@@ -49,10 +49,10 @@ class CSIRODataset(Dataset):
             "Dry_Green_g": {
                 "ID1139918758.jpg", "ID1337107565.jpg", "ID1403107574.jpg",
                 "ID1761544403.jpg", "ID40849327.jpg", "ID473494649.jpg",
-                "ID681680726.jpg", "ID697718693.jpg",
+                "ID681680726.jpg", "ID697718693.jpg", "ID230058600.jpg"
             },
             "Dry_Clover_g": {
-                "ID1403107574.jpg"
+                "ID1403107574.jpg", "ID230058600.jpg"
             },
             "Dry_Dead_g": {
                 "ID473494649.jpg", "ID661372352.jpg", "ID1403107574.jpg",

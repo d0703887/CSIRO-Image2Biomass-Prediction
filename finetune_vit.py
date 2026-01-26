@@ -71,8 +71,8 @@ class Trainer:
         self.data_folder = config["data_folder"]
         self.wandb_mode = config["wandb_mode"]
 
-        #self.regression_loss_fn = nn.HuberLoss(delta=5)
-        self.regression_loss_fn = nn.MSELoss()
+        self.regression_loss_fn = nn.HuberLoss(delta=5)
+        #self.regression_loss_fn = nn.MSELoss()
         self.bce_loss_fn = nn.BCELoss()
         self.r2_coeff = {
             "Dry_Green_g": 0.1,
@@ -127,15 +127,27 @@ class Trainer:
         return {f"{prefix}/{k}": v for k, v in metrics.items()}
 
     def _compute_global_mean(self, dataset):
-        global_means = {k: 0 for k in self.r2_coeff.keys()}
+        global_sums = {k: 0.0 for k in self.r2_coeff.keys()}
+        global_counts = {k: 0 for k in self.r2_coeff.keys()}
+
         for row in dataset.data_values:
-            for target_name, _ in self.r2_coeff.items():
-                global_means[target_name] += row[target_name]
-        for k in global_means.keys():
-            global_means[k] /= len(dataset.data_values)
+            for target_name in self.r2_coeff.keys():
+                val = row[target_name]
+
+                # Only include valid labels in the mean calculation
+                if val != -1:
+                    global_sums[target_name] += val
+                    global_counts[target_name] += 1
+
+        global_means = {}
+        for k in global_sums.keys():
+            # Prevent division by zero if a target has no valid samples
+            if global_counts[k] > 0:
+                global_means[k] = global_sums[k] / global_counts[k]
+            else:
+                global_means[k] = 0.0
 
         return global_means
-
 
     def process_batch(self, model, data_dict, epoch):
         for k, v in data_dict.items():
@@ -288,8 +300,15 @@ class Trainer:
             flat_preds = torch.cat(pred_dict[target_name])
             flat_targets = torch.cat(target_dict[target_name])
 
-            mse = torch.sum((flat_targets - flat_preds) ** 2)
-            var = torch.sum((flat_targets - weighted_mean[target_name]) ** 2)
+            valid_mask = (flat_targets != -1)
+            if valid_mask.sum() == 0:
+                r2_scores[f"{target_name}_r2"] = torch.tensor(0.0, device=flat_targets.device)
+                continue
+            valid_preds = flat_preds[valid_mask]
+            valid_targets = flat_targets[valid_mask]
+
+            mse = torch.sum((valid_targets - valid_preds) ** 2)
+            var = torch.sum((valid_targets - weighted_mean[target_name]) ** 2)
 
             r2 = 1 - mse / var
             r2_scores[f"{target_name}_r2"] = r2
