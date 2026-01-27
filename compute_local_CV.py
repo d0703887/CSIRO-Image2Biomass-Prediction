@@ -49,6 +49,7 @@ def run_cross_validation_inference(
         input_h: int,
         input_w: int,
         hidden_dim: int,
+        split_img: bool = False,  # <--- Added parameter
         batch_size: int = 4,
         num_workers: int = 4
 ):
@@ -99,7 +100,7 @@ def run_cross_validation_inference(
             df=val_df,
             input_h=input_h,
             input_w=input_w,
-            split_img=False,
+            split_img=split_img,  # <--- Pass split_img here
             is_train=False
         )
         val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers)
@@ -110,7 +111,7 @@ def run_cross_validation_inference(
             hidden_dim=hidden_dim,
             training_mode="freeze_backbone",
             predict_height=predict_height,
-            split_img=False
+            split_img=split_img  # <--- Pass split_img here
         )
 
         weight_path = weight_paths_config[fold_str]
@@ -240,9 +241,11 @@ if __name__ == "__main__":
         default=1536,
         help="Input image width"
     )
-
-    # Internal defaults (not requested to be exposed, but passed to function)
-    # If you want to expose predict_height later, add: parser.add_argument("--predict_height", action="store_true")
+    parser.add_argument(
+        "--split_img",
+        action="store_true",
+        help="If set, enable image splitting in the dataset and model"
+    )
 
     args = parser.parse_args()
 
@@ -262,8 +265,9 @@ if __name__ == "__main__":
         data_folder=args.data_folder,
         model_name=args.model_name,
         weight_paths_config=weight_paths_cfg,
-        predict_height=False,  # Hardcoded as not requested in arguments
+        predict_height=False,
         input_h=args.input_h,
         input_w=args.input_w,
-        hidden_dim=args.hidden_dim
+        hidden_dim=args.hidden_dim,
+        split_img=args.split_img  # <--- Pass argument from argparse
     )
