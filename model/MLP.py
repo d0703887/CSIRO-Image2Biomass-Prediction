@@ -29,9 +29,9 @@ class MLP(nn.Module):
         )
 
         # Initialize the final linear layer to stabilize training
-        # if mode == "biomass":
-        #     nn.init.normal_(self.mlp[-1].weight, mean=0.0, std=1e-5)
-        #     nn.init.constant_(self.mlp[-1].bias, 0)
+        if mode == "biomass":
+            nn.init.normal_(self.mlp[-1].weight, mean=0.0, std=1e-5)
+            nn.init.constant_(self.mlp[-1].bias, 0)
 
         # if mode == "gate":
         #     nn.init.normal_(self.mlp[-1].weight, mean=0.0, std=1e-5)

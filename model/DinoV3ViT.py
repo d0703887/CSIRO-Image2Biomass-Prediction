@@ -25,6 +25,7 @@ class DinoV3ViT(nn.Module):
             model_name,
             device_map="auto"
         )
+
         self.embed_dim = self.backbone.config.hidden_size
 
         if self.training_mode == "lora":
@@ -47,9 +48,9 @@ class DinoV3ViT(nn.Module):
             raise ValueError(f"Unsupported Training Mode: {self.training_mode}")
 
         # Biomass head
-        self.green_mlp = MLP(self.embed_dim * 2, hidden_dim, mode="biomass", dropout=0.6)
-        self.clover_mlp = MLP(self.embed_dim * 2, hidden_dim, mode="biomass", dropout=0.6)
-        self.dead_mlp = MLP(self.embed_dim * 2, hidden_dim, mode="biomass", dropout=0.6)
+        self.green_mlp = MLP(self.embed_dim * 2, hidden_dim, mode="biomass", dropout=0.3)
+        self.clover_mlp = MLP(self.embed_dim * 2, hidden_dim, mode="biomass", dropout=0.3)
+        self.dead_mlp = MLP(self.embed_dim * 2, hidden_dim, mode="biomass", dropout=0.3)
 
         # Occlusion head
         # self.green_occlusion_mlp = MLP(self.embed_dim if not self.predict_height else self.embed_dim + hidden_dim, hidden_dim, mode="biomass", dropout=0.6)
