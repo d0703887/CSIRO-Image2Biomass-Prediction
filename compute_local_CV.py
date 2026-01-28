@@ -124,6 +124,8 @@ def run_cross_validation_inference(
         with torch.no_grad():
             for batch in tqdm(val_loader, desc=f"Fold {fold_idx} Inference"):
                 imgs = batch["Input_Img"].to(device)
+                if split_img:
+                    imgs = imgs.view(-1, 3, input_h, input_w)
 
                 pred_dict = model(imgs)
                 batch_preds_map = {
