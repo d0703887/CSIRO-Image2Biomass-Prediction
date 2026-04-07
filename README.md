@@ -63,7 +63,7 @@ A straightforward pipeline using a frozen DinoV3 backbone followed by a patch-wi
 
 
 ## Result
-Public Ranking: 873/3804
+Public Ranking: 873/3804 <br>
 Private Ranking: 979/3804 (**top 25%**)
 ### Sample Prediction
 #### Dry_Green Prediction
