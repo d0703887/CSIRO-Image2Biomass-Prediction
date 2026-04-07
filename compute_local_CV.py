@@ -7,6 +7,7 @@ from tqdm import tqdm
 import os
 import argparse
 import sys
+import torchvision.transforms.v2.functional as F
 
 # --- Assumptions ---
 # This code assumes the classes (DinoV3ViT, CSIRODataset, etc.)
@@ -121,19 +122,48 @@ def run_cross_validation_inference(
         model.to(device)
         model.eval()
 
+        # TTA
+        tta_transforms = ["orig", "hflip", "vflip", "rot90", "rot270"]
+
         with torch.no_grad():
             for batch in tqdm(val_loader, desc=f"Fold {fold_idx} Inference"):
                 imgs = batch["Input_Img"].to(device)
                 if split_img:
                     imgs = imgs.view(-1, 3, input_h, input_w)
 
-                pred_dict = model(imgs)
+                # TTA
+                batch_accumulated_preds = {}
+                for tta_mode in tta_transforms:
+                    if tta_mode == "orig":
+                        aug_img = imgs
+                    elif tta_mode == "hflip":
+                        aug_img = F.hflip(imgs)
+                    elif tta_mode == "vflip":
+                        aug_img = F.vflip(imgs)
+                    elif tta_mode == "rot90":
+                        aug_img = F.rotate(imgs, 90)  # Clockwise 90
+                    elif tta_mode == "rot270":
+                        aug_img = F.rotate(imgs, 270)  # Counter-clockwise 90
+
+                    with torch.no_grad():
+                        pred_dict = model(aug_img)
+
+                    for k, v in pred_dict.items():
+                        if k not in batch_accumulated_preds:
+                            batch_accumulated_preds[k] = v
+                        else:
+                            batch_accumulated_preds[k] += v
+
+                #pred_dict = model(imgs)
+
+                avg_pred_dict = {k: v / len(tta_transforms) for k, v in batch_accumulated_preds.items()}
+
                 batch_preds_map = {
-                    "Dry_Green_g": pred_dict["Dry_Green_g"],
-                    "Dry_Clover_g": pred_dict["Dry_Clover_g"],
-                    "Dry_Dead_g": pred_dict["Dry_Dead_g"],
-                    "Dry_Total_g": pred_dict["Dry_Total_g"],
-                    "GDM_g": pred_dict["GDM_g"]
+                    "Dry_Green_g": avg_pred_dict["Dry_Green_g"],
+                    "Dry_Clover_g": avg_pred_dict["Dry_Clover_g"],
+                    "Dry_Dead_g": avg_pred_dict["Dry_Dead_g"],
+                    "Dry_Total_g": avg_pred_dict["Dry_Total_g"],
+                    "GDM_g": avg_pred_dict["GDM_g"]
                 }
 
                 for t_name in global_means.keys():

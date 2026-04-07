@@ -292,4 +292,35 @@ class CombinedExternalDataset(Dataset):
             "Dry_Clover_g": torch.tensor(row["Dry_Clover_g"], dtype=torch.float32),
         }
 
+if __name__ == '__main__':
+    from PIL import Image
+
+
+    def stitch_three_images(img1_path, img2_path, img3_path, output_path):
+        # Load the images
+        images = [Image.open(x) for x in [img1_path, img2_path, img3_path]]
+        images = images[1:]
+        # Calculate dimensions for the new image
+        widths, heights = zip(*(i.size for i in images))
+        print(widths[1], heights[1])
+
+        total_width = sum(widths)
+        max_height = max(heights)
+
+        # Create the new image (RGBA if you want to preserve transparency, else RGB)
+        new_img = Image.new('RGB', (total_width, max_height))
+
+        # Paste images side-by-side
+        x_offset = 0
+        for img in images:
+            # Optional: If images have different heights, this aligns them to the top.
+            new_img.paste(img, (x_offset, 0))
+            x_offset += img.width
+
+        # Save the result
+        new_img.save(output_path)
+        print(f"Stitched image saved to {output_path}")
+
+    # Example usage:
+    stitch_three_images('image.jpg', '0_mask.jpg', '0_result.jpg', 'Language-Guided.jpg')
 
